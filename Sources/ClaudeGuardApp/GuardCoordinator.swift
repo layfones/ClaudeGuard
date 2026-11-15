@@ -384,11 +384,22 @@ public final class GuardCoordinator {
             }.value
             lastAppliedDomainsBlocked = false
 
-            let postUnblockTraces = await traceProber.probeTargets(
+            var postUnblockTraces = await traceProber.probeTargets(
                 enabledTargets,
                 customProxyURL: customProxy,
                 timeout: 3.0
             )
+            // 刚解封时，系统或代理软件的 DNS 缓存可能仍返回封锁用的 0.0.0.0，探测会瞬间失败。
+            // 若立即判为「未确认」会再次封锁并重新写入缓存，形成循环；因此仅对「无结果」退避重试。
+            // 探测拿到非白名单出口时不重试，交给下方判定立即拦截。
+            for delay in [0.6, 1.2, 2.0, 3.0] where postUnblockTraces.contains(where: { $0.ip == nil }) {
+                try? await Task.sleep(for: .seconds(delay))
+                postUnblockTraces = await traceProber.probeTargets(
+                    enabledTargets,
+                    customProxyURL: customProxy,
+                    timeout: 3.0
+                )
+            }
             if !postUnblockTraces.isEmpty {
                 eval = AdmissionEvaluator.evaluate(
                     input: .init(
