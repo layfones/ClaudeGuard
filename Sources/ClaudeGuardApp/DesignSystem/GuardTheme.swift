@@ -3,7 +3,7 @@ import AppKit
 import ClaudeGuardCore
 
 // ClaudeGuard 设计基础：颜色只表示判定，其它控件保持系统默认的单色外观。
-// 对应 Figma「ClaudeGuard · Liquid Glass Redesign」中的 CG Tokens。
+// 对应 Figma 设计稿中的 CG Tokens（链接见本地的 Figmalink.md，不入库）。
 
 extension NSColor {
     /// 同时提供浅色、深色与「增强对比度」变体的动态颜色。

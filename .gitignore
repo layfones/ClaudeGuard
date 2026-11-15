@@ -8,3 +8,6 @@ dist/
 *.xcodeproj
 *.xcworkspace
 *.icloud
+
+# 本地私有链接（Figma 设计稿等），不入库
+Figmalink.md
