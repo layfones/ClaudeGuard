@@ -269,7 +269,7 @@ struct StatusPopoverView: View {
             openSetupAction()
         case .resumeProtection:
             coordinator.toggleProtection(true)
-        case .trustNewExit:
+        case .trustNewExit, .recheckRouteLeak:
             coordinator.acknowledgeCurrentExitJump()
         case .launchV2rayN, .openV2rayN:
             coordinator.launchV2rayN()

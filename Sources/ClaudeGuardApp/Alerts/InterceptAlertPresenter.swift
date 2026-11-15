@@ -19,6 +19,7 @@ public enum InterceptAlertPresenter {
     private enum ButtonAction {
         case launchV2rayN
         case acknowledgeJump
+        case recheckRouteLeak
         case openWhitelistSettings
         case dismiss
     }
@@ -73,10 +74,17 @@ public enum InterceptAlertPresenter {
                 )
             )
             alert.informativeText = verdict.message
-            alert.addButton(withTitle: "好")
-            actions.append(.dismiss)
-            alert.addButton(withTitle: "打开白名单设置…")
-            actions.append(.openWhitelistSettings)
+            if verdict.action == .recheckRouteLeak {
+                alert.addButton(withTitle: "重新检查")
+                actions.append(.recheckRouteLeak)
+                alert.addButton(withTitle: "取消")
+                actions.append(.dismiss)
+            } else {
+                alert.addButton(withTitle: "好")
+                actions.append(.dismiss)
+                alert.addButton(withTitle: "打开白名单设置…")
+                actions.append(.openWhitelistSettings)
+            }
         }
 
         alert.showsSuppressionButton = true
@@ -95,7 +103,7 @@ public enum InterceptAlertPresenter {
         switch actions[idx] {
         case .launchV2rayN:
             coordinator.launchV2rayN()
-        case .acknowledgeJump:
+        case .acknowledgeJump, .recheckRouteLeak:
             coordinator.acknowledgeCurrentExitJump()
         case .openWhitelistSettings:
             AppWindowRouter.showSettingsWindow(coordinator: coordinator, pane: .policy)

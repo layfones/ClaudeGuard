@@ -119,6 +119,73 @@ final class StatusPresentationTests: XCTestCase {
         XCTAssertEqual(route.lanes.map(\.diverges), [false, false, true])
     }
 
+    // MARK: - 分流漏网锁定（持久化）
+
+    /// 复现真实场景：之前 claude.ai 直连触发锁定；现在 HTTP/UDP 都已通过、域名被封锁无法复核。
+    func testPersistedRouteLeakShowsRealReasonAndRecheck() throws {
+        let sandbox = FileManager.default.temporaryDirectory.appendingPathComponent("cg-latch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        let store = AdmissionStateStore(paths: GuardPaths(appSupportDir: sandbox))
+        store.withExclusiveAccess { persisted in
+            persisted.routeLeakLatched = true
+            persisted.routeLeakMessage = "Claude (Desktop + Claude Code) 真实链路出口 120.229.199.175 未通过白名单（分流规则可能漏网直连）！"
+        }
+
+        let cfg = config()
+        let eval = AdmissionEvaluator.evaluate(
+            input: .init(
+                config: cfg,
+                httpResult: .init(ip: proxyIP, countryCode: "US", latencyMs: 90),
+                stunResult: .init(ip: proxyIP, latencyMs: 40),
+                targetSnapshots: [],
+                verifyTargetTraces: false
+            ),
+            stateStore: store
+        )
+        XCTAssertEqual(eval.verdict, .blocked)
+        XCTAssertTrue(eval.routeLeakLatched)
+        XCTAssertFalse(eval.routeLeakDetectedNow)
+
+        var s = allowedState()
+        s.verdict = eval.verdict
+        s.reason = eval.reason
+        s.routeLeakLatched = eval.routeLeakLatched
+        s.targetSnapshots = []
+
+        let verdict = VerdictPresenter.make(state: s, config: cfg, context: context())
+        XCTAssertEqual(verdict.title, "已拦截：分流漏网")
+        XCTAssertEqual(verdict.action, .recheckRouteLeak)
+        XCTAssertTrue(verdict.message.contains("claude.ai"), verdict.message)
+        XCTAssertTrue(verdict.message.contains("120.229.199.175"), verdict.message)
+        XCTAssertFalse(verdict.message.contains("不在白名单"), "出口其实在白名单内，不能误报")
+
+        // 用户确认后解除锁定，下一轮恢复放行
+        AdmissionEvaluator.acknowledgeCurrentExits(observedChannels: ["http": proxyIP, "stun": proxyIP], stateStore: store)
+        let after = AdmissionEvaluator.evaluate(
+            input: .init(
+                config: cfg,
+                httpResult: .init(ip: proxyIP, countryCode: "US", latencyMs: 90),
+                stunResult: .init(ip: proxyIP, latencyMs: 40),
+                targetSnapshots: [TargetProbeSnapshot(id: "claude", targetName: "Claude", ip: proxyIP, countryCode: "US", passed: false)],
+                verifyTargetTraces: true
+            ),
+            stateStore: store
+        )
+        XCTAssertEqual(after.verdict, .allowed)
+        XCTAssertFalse(after.routeLeakLatched)
+    }
+
+    func testSharedStateDecodesWithoutRouteLeakField() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var json = try JSONSerialization.jsonObject(with: encoder.encode(allowedState())) as! [String: Any]
+        json.removeValue(forKey: "routeLeakLatched")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(SharedGuardState.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(decoded.isRouteLeakLatched, "旧版 state.json 没有该字段时应视为未锁定")
+    }
+
     // MARK: - 其他状态
 
     func testJumpLatchedOffersTrustAction() {

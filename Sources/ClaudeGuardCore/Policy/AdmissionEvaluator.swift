@@ -38,6 +38,8 @@ public enum AdmissionEvaluator {
         public var jumpBeforeIP: String?
         public var jumpAfterIP: String?
         public var routeLeakDetectedNow: Bool
+        /// 本次判定是否处于分流漏网锁定中（含之前持久化的锁定与本次新触发的锁定）
+        public var routeLeakLatched: Bool
         public var httpSnapshot: ChannelProbeSnapshot?
         public var stunSnapshot: ChannelProbeSnapshot?
         public var targetSnapshots: [TargetProbeSnapshot]
@@ -134,6 +136,7 @@ public enum AdmissionEvaluator {
                 jumpBeforeIP: nil,
                 jumpAfterIP: nil,
                 routeLeakDetectedNow: false,
+                routeLeakLatched: false,
                 httpSnapshot: buildChannelSnapshot("HTTP", from: input.httpResult, config: cfg),
                 stunSnapshot: buildSTUNSnapshot(from: input.stunResult, config: cfg),
                 targetSnapshots: input.targetSnapshots
@@ -196,7 +199,8 @@ public enum AdmissionEvaluator {
             jumpLatched: Bool = false,
             jumpBefore: String? = nil,
             jumpAfter: String? = nil,
-            routeLeakNow: Bool = false
+            routeLeakNow: Bool = false,
+            routeLeakLatched: Bool = false
         ) -> EvaluationOutput {
             EvaluationOutput(
                 verdict: verdict,
@@ -210,6 +214,7 @@ public enum AdmissionEvaluator {
                 jumpBeforeIP: jumpBefore,
                 jumpAfterIP: jumpAfter,
                 routeLeakDetectedNow: routeLeakNow,
+                routeLeakLatched: routeLeakLatched || routeLeakNow,
                 httpSnapshot: httpSnap,
                 stunSnapshot: stunSnap,
                 targetSnapshots: evaluatedTargets
@@ -258,7 +263,7 @@ public enum AdmissionEvaluator {
         }
 
         if let leakReason = latchOutcome.routeLeak {
-            return makeOutput(verdict: .blocked, reason: leakReason, label: primaryLabel)
+            return makeOutput(verdict: .blocked, reason: leakReason, label: primaryLabel, routeLeakLatched: true)
         }
 
         if latchOutcome.latched {

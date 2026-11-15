@@ -104,6 +104,20 @@ struct PolicySettingsPane: View {
                     Text("出口变化时暂停放行")
                     Text("即使跳到另一个白名单节点，也需要你确认一次。")
                 }
+                if coordinator.state.isRouteLeakLatched {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("分流漏网，已锁定")
+                            Text("目标网站之前没有走代理。修好分流规则后再重新检查。")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("重新检查") {
+                            coordinator.acknowledgeCurrentExitJump()
+                        }
+                    }
+                }
                 if coordinator.state.jumpLatched {
                     HStack {
                         Text("\(coordinator.state.jumpBeforeIP ?? "原出口") → \(coordinator.state.jumpAfterIP ?? "新出口")")

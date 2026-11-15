@@ -161,6 +161,8 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
     public var jumpLatched: Bool
     public var jumpBeforeIP: String?
     public var jumpAfterIP: String?
+    /// 分流漏网锁定（可选字段：兼容不含此字段的旧 state.json）
+    public var routeLeakLatched: Bool?
     public var httpSnapshot: ChannelProbeSnapshot?
     public var stunSnapshot: ChannelProbeSnapshot?
     public var targetSnapshots: [TargetProbeSnapshot]
@@ -182,6 +184,7 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
         jumpLatched: Bool = false,
         jumpBeforeIP: String? = nil,
         jumpAfterIP: String? = nil,
+        routeLeakLatched: Bool? = nil,
         httpSnapshot: ChannelProbeSnapshot? = nil,
         stunSnapshot: ChannelProbeSnapshot? = nil,
         targetSnapshots: [TargetProbeSnapshot] = [],
@@ -202,6 +205,7 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
         self.jumpLatched = jumpLatched
         self.jumpBeforeIP = jumpBeforeIP
         self.jumpAfterIP = jumpAfterIP
+        self.routeLeakLatched = routeLeakLatched
         self.httpSnapshot = httpSnapshot
         self.stunSnapshot = stunSnapshot
         self.targetSnapshots = targetSnapshots
@@ -212,6 +216,8 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
         self.helperInstalled = helperInstalled
         self.updatedAt = updatedAt
     }
+
+    public var isRouteLeakLatched: Bool { routeLeakLatched ?? false }
 
     /// 判断 `state.json` 是否在有效新鲜期内，且与当前配置版本一致。
     public func isFresh(for config: GuardConfig, now: Date = Date()) -> Bool {

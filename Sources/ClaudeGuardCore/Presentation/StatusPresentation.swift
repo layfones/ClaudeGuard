@@ -227,6 +227,8 @@ public struct VerdictPresentation: Equatable, Sendable {
         case launchV2rayN
         case openV2rayN
         case disablePublicIPv6
+        /// 解除分流漏网锁定并重新检查
+        case recheckRouteLeak
         case launchTarget(id: String)
     }
 
@@ -355,6 +357,10 @@ public enum VerdictPresenter {
                 )
             }
 
+            if state.isRouteLeakLatched {
+                return routeLeakPresentation(state: state, config: config)
+            }
+
             let http = state.httpSnapshot
             let stun = state.stunSnapshot
             if let http, http.passed, let stun, let stunIP = stun.ip, !stun.passed, stunIP != http.ip {
@@ -402,6 +408,30 @@ public enum VerdictPresenter {
             // 已在上方处理
             return VerdictPresentation(tone: .neutral, symbol: "pause.fill", title: "守护已暂停", message: "")
         }
+    }
+
+    /// 分流漏网锁定：说明哪个网站没走代理、直连到了哪个 IP，并提供重新检查。
+    /// 锁定会持久保存，因此即使漏网已修复，也必须由用户确认后才解除。
+    static func routeLeakPresentation(state: SharedGuardState, config: GuardConfig) -> VerdictPresentation {
+        let leaked = state.targetSnapshots.first { $0.ip != nil && !$0.passed }
+        let target = leaked.flatMap { l in config.targets.first { $0.id == l.id } }
+            ?? config.targets.first { state.reason.hasPrefix($0.name) }
+        let host = target.flatMap(RoutePresenter.traceHost(for:)) ?? "目标网站"
+        let ip = leaked?.ip ?? firstIPv4(in: state.reason)
+        let direct = ip.map { "直连了 \($0)" } ?? "直连了本机网络"
+        let prefix = leaked == nil ? "之前检测到 " : ""
+        return VerdictPresentation(
+            tone: .block, symbol: "xmark",
+            title: "已拦截：分流漏网",
+            message: "\(prefix)\(host) 没有走代理，\(direct)。修好 v2rayN 的分流规则后，再重新检查。",
+            action: .recheckRouteLeak, actionTitle: "已修好，重新检查",
+            hint: "重新检查会解除这次锁定；如果仍然漏网，会再次拦截。"
+        )
+    }
+
+    static func firstIPv4(in text: String) -> String? {
+        guard let range = text.range(of: #"\b\d{1,3}(\.\d{1,3}){3}\b"#, options: .regularExpression) else { return nil }
+        return String(text[range])
     }
 
     /// 去掉括号里的补充说明：`Claude (Desktop + Claude Code)` → `Claude`。

@@ -420,6 +420,7 @@ public final class GuardCoordinator {
             jumpLatched: eval.jumpLatched,
             jumpBeforeIP: eval.jumpBeforeIP,
             jumpAfterIP: eval.jumpAfterIP,
+            routeLeakLatched: eval.routeLeakLatched,
             httpSnapshot: eval.httpSnapshot,
             stunSnapshot: eval.stunSnapshot,
             targetSnapshots: eval.targetSnapshots,
