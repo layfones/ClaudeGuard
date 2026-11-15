@@ -160,14 +160,30 @@ struct PolicySettingsPane: View {
             }
 
             Section {
-                Picker("客户端时区策略", selection: Binding(
-                    get: { coordinator.config.timezoneAlignmentMode },
-                    set: { mode in
-                        coordinator.updateConfig { $0.timezoneAlignmentMode = mode }
+                Toggle(isOn: Binding(
+                    get: { coordinator.config.timezoneAlignmentEnabled },
+                    set: { enabled in
+                        coordinator.updateConfig { $0.timezoneAlignmentEnabled = enabled }
                     }
                 )) {
-                    ForEach(TimezoneAlignmentMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("启用进程级时区对齐")
+                        Text("勾选后，受保护客户端会按出口地区使用对应时区；取消勾选则全部沿用本机系统时区。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if coordinator.config.timezoneAlignmentEnabled {
+                    Picker("客户端时区策略", selection: Binding(
+                        get: { coordinator.config.timezoneAlignmentMode },
+                        set: { mode in
+                            coordinator.updateConfig { $0.timezoneAlignmentMode = mode }
+                        }
+                    )) {
+                        ForEach(TimezoneAlignmentMode.allCases.filter { $0 != .disabled }) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
                 }
 
@@ -186,7 +202,7 @@ struct PolicySettingsPane: View {
                     }
                 }
 
-                if coordinator.config.timezoneAlignmentMode == .manual {
+                if coordinator.config.timezoneAlignmentEnabled && coordinator.config.timezoneAlignmentMode == .manual {
                     Picker("常用目标时区", selection: Binding(
                         get: { coordinator.config.manualTimeZoneIdentifier },
                         set: { tz in
@@ -224,7 +240,7 @@ struct PolicySettingsPane: View {
                     }
                 }
 
-                if coordinator.config.timezoneAlignmentMode != .disabled {
+                if coordinator.config.timezoneAlignmentEnabled {
                     Toggle(isOn: Binding(
                         get: { coordinator.config.relaunchDockAppsWithTimezone },
                         set: { val in

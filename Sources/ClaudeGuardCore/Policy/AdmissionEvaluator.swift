@@ -114,7 +114,7 @@ public enum AdmissionEvaluator {
         let fallbackColo = input.targetSnapshots.first(where: { $0.colo != nil })?.colo
             ?? input.httpResult?.colo
         let resolvedTZ = TimezoneAlignmentResolver.resolve(
-            mode: cfg.timezoneAlignmentMode,
+            mode: cfg.effectiveTimezoneAlignmentMode,
             manualTimeZone: cfg.manualTimeZoneIdentifier,
             countryCode: fallbackCC,
             colo: fallbackColo
@@ -179,7 +179,7 @@ public enum AdmissionEvaluator {
         let primaryColo = evaluatedTargets.first(where: { $0.colo != nil })?.colo
             ?? input.httpResult?.colo
         let activeTZ = TimezoneAlignmentResolver.resolve(
-            mode: cfg.timezoneAlignmentMode,
+            mode: cfg.effectiveTimezoneAlignmentMode,
             manualTimeZone: cfg.manualTimeZoneIdentifier,
             countryCode: primaryCC,
             colo: primaryColo

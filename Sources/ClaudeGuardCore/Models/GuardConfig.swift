@@ -120,9 +120,16 @@ public struct GuardConfig: Codable, Sendable, Equatable {
     public var customHTTPProxyURL: String
 
     /// 进程级时区对齐配置（不影响 macOS 系统时区）
+    /// 总开关：用户可勾选关闭，默认开启
+    public var timezoneAlignmentEnabled: Bool
     public var timezoneAlignmentMode: TimezoneAlignmentMode
     public var manualTimeZoneIdentifier: String
     public var relaunchDockAppsWithTimezone: Bool
+
+    /// 综合总开关后实际生效的时区策略（总开关关闭时恒为 `.disabled`）
+    public var effectiveTimezoneAlignmentMode: TimezoneAlignmentMode {
+        timezoneAlignmentEnabled ? timezoneAlignmentMode : .disabled
+    }
 
     /// 首次引导完成标记
     public var onboardingCompleted: Bool
@@ -146,6 +153,7 @@ public struct GuardConfig: Codable, Sendable, Equatable {
         blockClaudeAutoUpdates: Bool = true,
         useCustomHTTPProxy: Bool = false,
         customHTTPProxyURL: String = "",
+        timezoneAlignmentEnabled: Bool = true,
         timezoneAlignmentMode: TimezoneAlignmentMode = .autoFromExit,
         manualTimeZoneIdentifier: String = "America/Los_Angeles",
         relaunchDockAppsWithTimezone: Bool = true,
@@ -167,6 +175,7 @@ public struct GuardConfig: Codable, Sendable, Equatable {
         self.blockClaudeAutoUpdates = blockClaudeAutoUpdates
         self.useCustomHTTPProxy = useCustomHTTPProxy
         self.customHTTPProxyURL = customHTTPProxyURL
+        self.timezoneAlignmentEnabled = timezoneAlignmentEnabled
         self.timezoneAlignmentMode = timezoneAlignmentMode
         self.manualTimeZoneIdentifier = manualTimeZoneIdentifier
         self.relaunchDockAppsWithTimezone = relaunchDockAppsWithTimezone
@@ -191,7 +200,10 @@ public struct GuardConfig: Codable, Sendable, Equatable {
         self.blockClaudeAutoUpdates = try c.decodeIfPresent(Bool.self, forKey: .blockClaudeAutoUpdates) ?? true
         self.useCustomHTTPProxy = try c.decodeIfPresent(Bool.self, forKey: .useCustomHTTPProxy) ?? false
         self.customHTTPProxyURL = try c.decodeIfPresent(String.self, forKey: .customHTTPProxyURL) ?? ""
-        self.timezoneAlignmentMode = try c.decodeIfPresent(TimezoneAlignmentMode.self, forKey: .timezoneAlignmentMode) ?? .autoFromExit
+        let storedMode = try c.decodeIfPresent(TimezoneAlignmentMode.self, forKey: .timezoneAlignmentMode) ?? .autoFromExit
+        // 兼容旧配置：旧版用 mode == .disabled 表示关闭，迁移为总开关关闭
+        self.timezoneAlignmentEnabled = try c.decodeIfPresent(Bool.self, forKey: .timezoneAlignmentEnabled) ?? (storedMode != .disabled)
+        self.timezoneAlignmentMode = storedMode == .disabled ? .autoFromExit : storedMode
         self.manualTimeZoneIdentifier = try c.decodeIfPresent(String.self, forKey: .manualTimeZoneIdentifier) ?? "America/Los_Angeles"
         self.relaunchDockAppsWithTimezone = try c.decodeIfPresent(Bool.self, forKey: .relaunchDockAppsWithTimezone) ?? true
         self.onboardingCompleted = try c.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false

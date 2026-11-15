@@ -317,4 +317,24 @@ final class ClaudeGuardCoreTests: XCTestCase {
         XCTAssertTrue(claude.dedicatedPFCIDRs.contains("160.79.104.0/23"))
         XCTAssertTrue(try XCTUnwrap(loaded.targets.first { $0.id == "chatgpt" }).isEnabled)
     }
+
+    // MARK: - 7. 时区对齐总开关
+
+    func testTimezoneAlignmentToggleDefaultsOnAndMigratesLegacyDisabled() throws {
+        XCTAssertTrue(GuardConfig().timezoneAlignmentEnabled)
+        XCTAssertEqual(GuardConfig().effectiveTimezoneAlignmentMode, .autoFromExit)
+
+        var off = GuardConfig()
+        off.timezoneAlignmentEnabled = false
+        XCTAssertEqual(off.effectiveTimezoneAlignmentMode, .disabled)
+
+        let decoder = JSONDecoder()
+        let legacyOff = try decoder.decode(GuardConfig.self, from: Data(#"{"timezoneAlignmentMode":"disabled"}"#.utf8))
+        XCTAssertFalse(legacyOff.timezoneAlignmentEnabled)
+        let legacyManual = try decoder.decode(GuardConfig.self, from: Data(#"{"timezoneAlignmentMode":"manual"}"#.utf8))
+        XCTAssertTrue(legacyManual.timezoneAlignmentEnabled)
+        XCTAssertEqual(legacyManual.effectiveTimezoneAlignmentMode, .manual)
+        let fresh = try decoder.decode(GuardConfig.self, from: Data("{}".utf8))
+        XCTAssertTrue(fresh.timezoneAlignmentEnabled)
+    }
 }

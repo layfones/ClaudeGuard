@@ -84,7 +84,7 @@ private func evaluateLiveReadOnly(config: GuardConfig, paths: GuardPaths) async 
 private func currentVerdictForCLI(config: GuardConfig, paths: GuardPaths) async -> (verdict: GuardVerdict, reason: String, ip: String?, timeZone: String?) {
     if !config.protectionEnabled {
         let manualOrDisabled = TimezoneAlignmentResolver.resolve(
-            mode: config.timezoneAlignmentMode,
+            mode: config.effectiveTimezoneAlignmentMode,
             manualTimeZone: config.manualTimeZoneIdentifier,
             countryCode: nil,
             colo: nil
@@ -130,7 +130,7 @@ private func runClaudeCLIWrapper(arguments: [String]) async -> Int32 {
             )
             return 1
         }
-    } else if config.timezoneAlignmentMode != .disabled {
+    } else if config.effectiveTimezoneAlignmentMode != .disabled {
         let check = await currentVerdictForCLI(config: config, paths: paths)
         resolvedTimeZoneForSession = check.timeZone
     }
