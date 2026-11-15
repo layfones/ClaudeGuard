@@ -52,6 +52,7 @@ public final class GuardCoordinator {
     private var lastAppliedDomainsBlocked: Bool?
     private var lastAppliedUpdatesBlocked: Bool?
     private var hasAlertedCurrentBlockEpisode = false
+    private var transientDebouncer = TransientFailureDebouncer()
     private var started = false
 
     public init(paths: GuardPaths = .live) {
@@ -405,6 +406,12 @@ public final class GuardCoordinator {
         // 若配置在本轮探测中途已被用户修改，丢弃本轮旧判定并重跑
         guard currentCfg.configRevision == config.configRevision else {
             checkQueued = true
+            return
+        }
+
+        // 偶发探测无响应：刚确认放行时先沿用上一次结果，不改动界面与网络规则。
+        // 拿到非白名单出口（.blocked）不受影响，仍立即拦截。
+        if transientDebouncer.shouldHoldPrevious(newVerdict: eval.verdict, previousVerdict: state.verdict) {
             return
         }
 
