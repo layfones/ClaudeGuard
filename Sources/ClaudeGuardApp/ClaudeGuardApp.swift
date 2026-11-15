@@ -4,6 +4,13 @@ import ClaudeGuardCore
 
 public final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if MainActor.assumeIsolated({ PreviewRenderer.runIfRequested() }) {
+            NSApplication.shared.terminate(nil)
+            return
+        }
+        #endif
+
         // 单实例保护：若已有 ClaudeGuard 实例在后台运行，当前重复启动自动退出
         let myPID = ProcessInfo.processInfo.processIdentifier
         let bundleID = Bundle.main.bundleIdentifier ?? "com.claudeguard.app"

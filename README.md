@@ -89,3 +89,9 @@ swift test
 ```bash
 ./dist/ClaudeGuard.app/Contents/Helpers/claudeguard-cli status --dry-run
 ```
+
+把菜单栏面板、首次引导和各设置面板渲染成 PNG 检查界面（仅 Debug 构建；使用临时数据目录，不启动守护，也不改动网络设置）：
+
+```bash
+swift run ClaudeGuard --render-previews /tmp/claudeguard-previews
+```
