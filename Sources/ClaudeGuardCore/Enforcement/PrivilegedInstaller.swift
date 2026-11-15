@@ -166,6 +166,10 @@ public enum PrivilegedInstaller {
         setLaunchAtLogin(enabled: false, paths: paths)
 
         if isHelperInstalled(paths: paths) {
+            // 若曾通过 ClaudeGuard 关闭过公网 IPv6（存在备份快照），卸载时一并自动恢复为 Automatic
+            if FileManager.default.fileExists(atPath: paths.ipv6BackupFile.path) {
+                _ = try? IPv6GuardManager.setPublicIPv6Disabled(false, paths: paths)
+            }
             _ = NetworkBlockStaging.stageAndTrigger(
                 blockTargetDomains: false,
                 blockClaudeUpdates: false,

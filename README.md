@@ -25,7 +25,10 @@
    - 根据当前代理出口的 `loc` 国家码与 Cloudflare `colo` 边缘机房代码，自动推导自洽的当地 IANA 时区（如 `KR` → `Asia/Seoul`、`US + LAX` → `America/Los_Angeles`、`US + EWR` → `America/New_York`，也支持手动指定固定时区）。
    - 同时作用于**桌面端应用**（支持从菜单栏一键带时区启动，或直接点 Dock 图标时自动通过 LaunchServices 无损注入 `TZ` 重拉起）与**终端 `claude` CLI 会话**，整台 Mac 的系统时间、日历与微信保持北京时间不变。
 
-5. **Claude 专属全链路覆盖**
+5. **一键关闭/恢复系统公网 IPv6（保留 AirDrop）**
+   - 内置对本机所有物理网卡的一键切换（底层执行 `networksetup -setv6linklocal`），彻底切断国内运营商原生公网 IPv6 绕过 IPv4 代理隧道的直连泄漏，同时保留局域网 `fe80::` 链路使 **AirDrop、通用剪贴板、Apple Watch 解锁** 不受影响；部署特权助手后切换无需重复输密码，卸载时自动恢复原状。
+
+6. **Claude 专属全链路覆盖**
    - 同时覆盖 `Claude.app`（`com.anthropic.claudefordesktop`）、桌面端内嵌的 `Claude-3p/.../claude.app`（`com.anthropic.claude-code`）以及终端独立安装的 `claude` CLI（原生编译薄包装器启动开销 < 5ms，60 秒自愈巡检防更新覆盖）。
    - 支持一键**禁止 Claude 自动更新**（`ShipIt` 目录 `uchg` 锁定 + 更新域名屏蔽 + CLI 环境变量注入）。
 

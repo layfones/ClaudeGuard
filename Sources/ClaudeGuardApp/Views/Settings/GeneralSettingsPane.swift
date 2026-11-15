@@ -49,6 +49,21 @@ struct GeneralSettingsPane: View {
                         coordinator.runDoctorRepair()
                     }
                 }
+
+                Toggle(isOn: Binding(
+                    get: { coordinator.systemIPv6Status.isPublicIPv6DisabledOnAll },
+                    set: { disable in
+                        coordinator.toggleSystemPublicIPv6(disable: disable)
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("一键关闭系统公网 IPv6（设为仅本地链接，不影响 AirDrop）")
+                        Text(coordinator.systemIPv6Status.summaryText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(coordinator.isSwitchingIPv6 || coordinator.systemIPv6Status.services.isEmpty)
             } header: {
                 Text("内核级零泄漏防线")
             }

@@ -28,6 +28,8 @@ public final class GuardCoordinator {
     public var state: SharedGuardState
     public var recentEvents: [GuardEvent] = []
     public var cliStatus: CLIHookManager.StatusReport = .init()
+    public var systemIPv6Status: SystemIPv6Status = .init()
+    public var isSwitchingIPv6: Bool = false
     public var isChecking: Bool = false
     public var selectedSettingsTab: SettingsTab = .general
     public var lastActionMessage: String?
@@ -70,6 +72,7 @@ public final class GuardCoordinator {
             helperInstalled: PrivilegedInstaller.isHelperInstalled(paths: paths)
         )
         self.recentEvents = eventLogger.readRecent()
+        self.systemIPv6Status = IPv6GuardManager.inspectStatus()
     }
 
     public func startIfNeeded() {
@@ -224,6 +227,31 @@ public final class GuardCoordinator {
         }
     }
 
+    public func toggleSystemPublicIPv6(disable: Bool) {
+        guard !isSwitchingIPv6 else { return }
+        isSwitchingIPv6 = true
+        let pathsCopy = paths
+        Task { @MainActor in
+            defer { isSwitchingIPv6 = false }
+            do {
+                let updated = try await Task.detached {
+                    try IPv6GuardManager.setPublicIPv6Disabled(disable, paths: pathsCopy)
+                }.value
+                systemIPv6Status = updated
+                let actionDesc = disable
+                    ? "已将物理网卡设为仅本地链接（关闭运营商公网 IPv6，保留 AirDrop）"
+                    : "已恢复物理网卡自动获取公网 IPv6 (Automatic)"
+                eventLogger.append(.systemIPv6Toggled, message: actionDesc)
+                refreshEvents()
+                setBanner(disable ? "已关闭系统公网 IPv6，正在重测出口…" : "已恢复系统公网 IPv6", isError: false)
+                triggerRecheck()
+            } catch {
+                systemIPv6Status = IPv6GuardManager.inspectStatus()
+                setBanner(error.localizedDescription, isError: true)
+            }
+        }
+    }
+
     public func launchV2rayN() {
         if ProcessEnforcer.launchV2rayNIfInstalled() {
             setBanner("正在唤起 v2rayN，待连接就绪后将自动放行…", isError: false)
@@ -305,6 +333,8 @@ public final class GuardCoordinator {
     private func performSingleCheckPass() async {
         let currentCfg = config
         let proxyEnv = ProxyEnvironmentDetector.inspect()
+        let ipv6Snap = await Task.detached { IPv6GuardManager.inspectStatus() }.value
+        systemIPv6Status = ipv6Snap
         let helperReady = PrivilegedInstaller.isHelperInstalled(paths: paths)
         let customProxy = currentCfg.useCustomHTTPProxy ? currentCfg.customHTTPProxyURL : nil
 

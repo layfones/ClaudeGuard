@@ -147,21 +147,33 @@ struct SetupGuideView: View {
                 }
 
                 if let mismatchSTUN = stunMismatchIP {
-                    HStack(alignment: .center, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("检测到 UDP/IPv6 出口不一致：STUN 返回 \(mismatchSTUN)")
-                                .font(.caption.weight(.semibold))
-                            Text("说明当前代理未接管 IPv6 或 UDP。可在 v2rayN 中开启 IPv6 TUN 接管，或切换为「HTTP + 目标链路」模式避免误拦。")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("检测到 UDP/IPv6 出口不一致：STUN 返回 \(mismatchSTUN)")
+                                    .font(.caption.weight(.semibold))
+                                Text("说明本机运营商公网 IPv6 绕过了 v2rayN IPv4 隧道。推荐直接一键关闭系统公网 IPv6（保留 AirDrop 本地链路），或切换为「HTTP + 目标链路」检测模式。")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        Spacer()
-                        Button("切为 HTTP+目标链路") {
-                            coordinator.updateConfig { $0.exitCheckMode = .httpAndTrace }
+                        HStack(spacing: 8) {
+                            Button {
+                                coordinator.toggleSystemPublicIPv6(disable: true)
+                            } label: {
+                                Label("一键关闭系统公网 IPv6（推荐）", systemImage: "network.slash")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(coordinator.isSwitchingIPv6)
+
+                            Button("改用 HTTP+目标链路模式") {
+                                coordinator.updateConfig { $0.exitCheckMode = .httpAndTrace }
+                            }
+                            .controlSize(.small)
                         }
-                        .controlSize(.small)
                     }
                     .padding(8)
                     .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))

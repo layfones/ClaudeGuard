@@ -182,6 +182,21 @@ struct StatusPopoverView: View {
                 .controlSize(.regular)
             }
 
+            if let stunIP = coordinator.state.stunSnapshot?.ip,
+               stunIP.contains(":"),
+               !coordinator.state.stunSnapshot!.passed,
+               !coordinator.systemIPv6Status.isPublicIPv6DisabledOnAll {
+                Button {
+                    coordinator.toggleSystemPublicIPv6(disable: true)
+                } label: {
+                    Label("STUN 漏出公网 IPv6 · 一键关闭公网 IPv6", systemImage: "shield.lefthalf.filled")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(coordinator.isSwitchingIPv6)
+            }
+
             if canQuickAddCurrentIP, let currentIP = coordinator.state.primaryIP {
                 if showQuickAddIP {
                     VStack(alignment: .leading, spacing: 6) {

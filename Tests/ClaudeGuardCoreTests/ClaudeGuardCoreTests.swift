@@ -337,4 +337,48 @@ final class ClaudeGuardCoreTests: XCTestCase {
         let fresh = try decoder.decode(GuardConfig.self, from: Data("{}".utf8))
         XCTAssertTrue(fresh.timezoneAlignmentEnabled)
     }
+
+    // MARK: - 8. 系统公网 IPv6 防泄漏策略生成测试
+
+    func testIPv6GuardManagerPolicyAndStatus() {
+        let payload = IPv6GuardManager.buildPolicyPayload(
+            disablePublicIPv6: true,
+            services: ["Wi-Fi", "Thunderbolt Bridge", "-evil-flag", "*Disabled"]
+        )
+        XCTAssertEqual(payload, "linklocal\nWi-Fi\nThunderbolt Bridge\n")
+
+        let statusOpen = SystemIPv6Status(services: [
+            NetworkServiceIPv6Item(serviceName: "Wi-Fi", mode: "Automatic"),
+            NetworkServiceIPv6Item(serviceName: "Thunderbolt Bridge", mode: "Link-local")
+        ])
+        XCTAssertFalse(statusOpen.isPublicIPv6DisabledOnAll)
+
+        let statusLocked = SystemIPv6Status(services: [
+            NetworkServiceIPv6Item(serviceName: "Wi-Fi", mode: "Link-local"),
+            NetworkServiceIPv6Item(serviceName: "Thunderbolt Bridge", mode: "Link-local")
+        ])
+        XCTAssertTrue(statusLocked.isPublicIPv6DisabledOnAll)
+
+        // 实机回归用例：macOS networksetup -getinfo 在 LinkLocal 模式下省略 IPv6: 行
+        let macOSLinkLocalOutput = """
+        DHCP Configuration
+        IP address: 192.168.0.186
+        Subnet mask: 255.255.255.0
+        Router: 192.168.0.1
+        Client ID:
+        IPv6 IP address: none
+        IPv6 Router: none
+        Wi-Fi ID: 80:47:15:9d:04:66
+        """
+        XCTAssertEqual(IPv6GuardManager.parseNetworkSetupInfo(macOSLinkLocalOutput).mode, "Link-local")
+
+        let macOSAutoOutput = """
+        DHCP Configuration
+        IP address: 192.168.0.186
+        IPv6: Automatic
+        IPv6 IP address: none
+        IPv6 Router: none
+        """
+        XCTAssertEqual(IPv6GuardManager.parseNetworkSetupInfo(macOSAutoOutput).mode, "Automatic")
+    }
 }

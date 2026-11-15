@@ -164,6 +164,8 @@ struct LogsAndResetPane: View {
             return "checkmark.seal.fill"
         case .timezoneAlignedLaunch:
             return "clock.badge.checkmark.fill"
+        case .systemIPv6Toggled:
+            return "network.badge.shield.half.filled"
         case .emergencyUnblocked:
             return "lock.open.fill"
         default:

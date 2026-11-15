@@ -11,7 +11,9 @@ public struct GuardPaths: Sendable, Equatable {
     public let eventsFile: URL
     public let pendingHostsBlockFile: URL
     public let pendingPFAnchorFile: URL
+    public let pendingIPv6PolicyFile: URL
     public let pendingRequestFile: URL
+    public let ipv6BackupFile: URL
 
     public let systemHelperDir: URL
     public let systemHelperBinary: URL
@@ -46,7 +48,9 @@ public struct GuardPaths: Sendable, Equatable {
         self.eventsFile = base.appendingPathComponent("events.jsonl")
         self.pendingHostsBlockFile = pending.appendingPathComponent("hosts.block")
         self.pendingPFAnchorFile = pending.appendingPathComponent("pf.anchor")
+        self.pendingIPv6PolicyFile = pending.appendingPathComponent("ipv6.policy")
         self.pendingRequestFile = pending.appendingPathComponent("request")
+        self.ipv6BackupFile = base.appendingPathComponent("ipv6-backup.json")
 
         let sysSupport = systemRoot
             .appendingPathComponent("Library", isDirectory: true)

@@ -30,14 +30,16 @@
 
 #define MAX_STAGED_HOSTS_BYTES (512 * 1024)
 #define MAX_STAGED_PF_BYTES    (64 * 1024)
+#define MAX_STAGED_IPV6_BYTES  (8 * 1024)
 #define MAX_PF_ENTRIES         256
+#define MAX_IPV6_SERVICES      32
 
 #define BLOCK_BEGIN  "# BEGIN CLAUDEGUARD BLOCKS"
 #define BLOCK_END    "# END CLAUDEGUARD BLOCKS"
 #define UPDATE_BEGIN "# BEGIN CLAUDEGUARD UPDATE BLOCKS"
 #define UPDATE_END   "# END CLAUDEGUARD UPDATE BLOCKS"
 
-#define SYS_SUPPORT_DIR "/Library/Application Support/ClaudeGuard"
+#define SYS_SUPPORT_DIR  "/Library/Application Support/ClaudeGuard"
 #define VERIFIED_PF_FILE "/Library/Application Support/ClaudeGuard/pf.anchor.verified"
 #define PF_TOKEN_FILE    "/Library/Application Support/ClaudeGuard/pf.token"
 #define PF_ANCHOR_NAME   "com.apple/claudeguard"
@@ -444,12 +446,95 @@ static void apply_pf_anchor(const char *pf_staged_text, int dry_run, const char 
     }
 }
 
+static int is_valid_network_service_name(const char *name) {
+    if (!name) return 0;
+    size_t len = strlen(name);
+    if (len < 1 || len > 120) return 0;
+    /* Disallow leading '-' or '*' to prevent flag injection into networksetup */
+    if (name[0] == '-' || name[0] == '*') return 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x20 || c == 0x7F || c == '\n' || c == '\r') return 0;
+    }
+    return 1;
+}
+
+static int apply_ipv6_policy(const char *policy_text, int dry_run, const char *dry_ipv6_out_path) {
+    if (!policy_text || policy_text[0] == '\0') {
+        if (dry_run && dry_ipv6_out_path) {
+            unlink(dry_ipv6_out_path);
+        }
+        return 0;
+    }
+
+    char *copy = strdup(policy_text);
+    if (!copy) return -1;
+
+    char *cursor = copy;
+    char *first_line = strsep(&cursor, "\n");
+    if (!first_line) {
+        free(copy);
+        return -1;
+    }
+    size_t flen = strlen(first_line);
+    if (flen > 0 && first_line[flen - 1] == '\r') first_line[--flen] = '\0';
+
+    const char *ns_flag = NULL;
+    if (strcmp(first_line, "linklocal") == 0) {
+        ns_flag = "-setv6linklocal";
+    } else if (strcmp(first_line, "automatic") == 0) {
+        ns_flag = "-setv6automatic";
+    } else {
+        free(copy);
+        return -1;
+    }
+
+    char services[MAX_IPV6_SERVICES][128];
+    int count = 0;
+    char *line = NULL;
+    while ((line = strsep(&cursor, "\n")) != NULL && count < MAX_IPV6_SERVICES) {
+        size_t l = strlen(line);
+        if (l > 0 && line[l - 1] == '\r') line[--l] = '\0';
+        if (l == 0) continue;
+        if (!is_valid_network_service_name(line)) {
+            free(copy);
+            return -1;
+        }
+        strncpy(services[count], line, sizeof(services[count]) - 1);
+        services[count][sizeof(services[count]) - 1] = '\0';
+        count++;
+    }
+    free(copy);
+
+    if (count == 0) return 0;
+
+    if (dry_run) {
+        if (dry_ipv6_out_path) {
+            FILE *fp = fopen(dry_ipv6_out_path, "w");
+            if (fp) {
+                for (int i = 0; i < count; i++) {
+                    fprintf(fp, "%s %s\n", ns_flag, services[i]);
+                }
+                fclose(fp);
+            }
+        }
+        return 0;
+    }
+
+    for (int i = 0; i < count; i++) {
+        char *ns_argv[] = {"/usr/sbin/networksetup", (char *)ns_flag, services[i], NULL};
+        (void)run_cmd(ns_argv, NULL, 0);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     int dry_run = 0;
     const char *config_dir = NULL;
     const char *hosts_in = "/etc/hosts";
     const char *hosts_out = "/etc/hosts";
     const char *dry_pf_out = NULL;
+    const char *dry_ipv6_out = NULL;
 
     if (argc == 2) {
         config_dir = argv[1];
@@ -459,6 +544,7 @@ int main(int argc, char *argv[]) {
         hosts_in = argv[3];
         hosts_out = argv[4];
         if (argc >= 6) dry_pf_out = argv[5];
+        if (argc >= 7) dry_ipv6_out = argv[6];
     } else {
         fprintf(stderr, "Usage: claudeguard-helper <config_dir>\n");
         return 2;
@@ -519,5 +605,30 @@ int main(int argc, char *argv[]) {
 
     apply_pf_anchor(pf_text, dry_run, dry_pf_out);
     free(pf_text);
+
+    char staged_ipv6_path[PATH_MAX];
+    snprintf(staged_ipv6_path, sizeof(staged_ipv6_path), "%s/pending/ipv6.policy", config_dir);
+    char *ipv6_text = NULL;
+    if (lstat(staged_ipv6_path, &lst) == 0) {
+        size_t v6sz = 0;
+        int v6fd = open_trusted_file(staged_ipv6_path, trusted_uid, MAX_STAGED_IPV6_BYTES, &v6sz);
+        if (v6fd < 0) {
+            fprintf(stderr, "claudeguard-helper: rejected untrusted ipv6.policy\n");
+            return 1;
+        }
+        ipv6_text = read_fd_all(v6fd, v6sz);
+        close(v6fd);
+    }
+    if (apply_ipv6_policy(ipv6_text, dry_run, dry_ipv6_out) != 0) {
+        fprintf(stderr, "claudeguard-helper: rejected malformed ipv6.policy\n");
+        free(ipv6_text);
+        return 1;
+    }
+    if (!dry_run && ipv6_text != NULL) {
+        /* One-shot command file: remove after applying so routine hosts syncs don't re-run networksetup */
+        unlink(staged_ipv6_path);
+    }
+    free(ipv6_text);
+
     return 0;
 }

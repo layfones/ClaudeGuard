@@ -12,6 +12,7 @@ public enum GuardEventKind: String, Codable, Sendable {
     case helperInstalled = "helper_installed"
     case emergencyUnblocked = "emergency_unblocked"
     case timezoneAlignedLaunch = "timezone_aligned_launch"
+    case systemIPv6Toggled = "system_ipv6_toggled"
     case probeWarning = "probe_warning"
 
     public var label: String {
@@ -27,6 +28,7 @@ public enum GuardEventKind: String, Codable, Sendable {
         case .helperInstalled: return "防线部署"
         case .emergencyUnblocked: return "紧急解封"
         case .timezoneAlignedLaunch: return "时区对齐"
+        case .systemIPv6Toggled: return "IPv6 切换"
         case .probeWarning: return "探测异常"
         }
     }
