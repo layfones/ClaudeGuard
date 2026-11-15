@@ -39,7 +39,11 @@ public final class GuardCoordinator {
     private var pathMonitor: NWPathMonitor?
     private var dynamicStore: SCDynamicStore?
     private var workspaceLaunchObserver: NSObjectProtocol?
+    private var workspaceTerminateObserver: NSObjectProtocol?
     private var workspaceWakeObserver: NSObjectProtocol?
+
+    private var pendingTZRelaunchUntil: [String: Date] = [:]
+    private var tzAlignedPIDs: Set<pid_t> = []
 
     private var checkInFlight = false
     private var checkQueued = false
@@ -234,6 +238,33 @@ public final class GuardCoordinator {
         }
     }
 
+    /// 从菜单栏悬浮卡片一键安全启动目标应用（自动携带当前对齐的进程级 `TZ` 时区）。
+    public func launchGuardedAppAligned(_ target: GuardedTarget) {
+        if config.protectionEnabled && state.verdict.shouldBlockFreshLaunch {
+            setBanner("当前出口未通过校验，已阻止启动 \(target.name)", isError: true)
+            return
+        }
+        let tz = state.effectiveTimeZone
+        pendingTZRelaunchUntil[target.id] = Date().addingTimeInterval(8.0)
+        if ProcessEnforcer.launchTargetWithEnvironment(target, timeZoneIdentifier: tz, createNewInstance: false) {
+            if let tz {
+                eventLogger.append(
+                    .timezoneAlignedLaunch,
+                    message: "启动 \(target.name) 并注入对齐时区 \(tz)",
+                    detectedIP: state.primaryIP,
+                    targetName: target.name
+                )
+                refreshEvents()
+                setBanner("已按时区 \(tz) 启动 \(target.name)", isError: false)
+            } else {
+                setBanner("已启动 \(target.name)", isError: false)
+            }
+        } else {
+            pendingTZRelaunchUntil.removeValue(forKey: target.id)
+            setBanner("未找到已安装的 \(target.name)", isError: true)
+        }
+    }
+
     public func refreshEvents() {
         recentEvents = eventLogger.readRecent()
     }
@@ -353,6 +384,8 @@ public final class GuardCoordinator {
             reason: eval.reason,
             primaryIP: eval.primaryIP,
             primaryCountryCode: eval.primaryCountryCode,
+            primaryColo: eval.primaryColo,
+            effectiveTimeZone: eval.effectiveTimeZone,
             matchedWhitelistLabel: eval.matchedWhitelistLabel,
             jumpLatched: eval.jumpLatched,
             jumpBeforeIP: eval.jumpBeforeIP,
@@ -476,6 +509,20 @@ public final class GuardCoordinator {
     // MARK: - 系统级监听（Dock 启动毫秒级拦截 + 网络切换 + 休眠唤醒）
 
     private func setupAppLaunchInterceptor() {
+        workspaceTerminateObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+                return
+            }
+            let deadPID = app.processIdentifier
+            MainActor.assumeIsolated {
+                _ = self?.tzAlignedPIDs.remove(deadPID)
+            }
+        }
+
         workspaceLaunchObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
             object: nil,
@@ -490,24 +537,74 @@ public final class GuardCoordinator {
                 guard let matched = ProcessEnforcer.matchedTarget(for: app, in: self.config.enabledTargets) else {
                     return
                 }
-                guard self.state.verdict.shouldBlockFreshLaunch else { return }
 
-                ProcessEnforcer.forceTerminateApp(app, target: matched)
-                self.eventLogger.append(
-                    .appLaunchIntercepted,
-                    message: "拦截 Dock 启动 \(matched.name)：\(self.state.reason)",
-                    detectedIP: self.state.primaryIP,
-                    targetName: matched.name
-                )
-                self.refreshEvents()
-
-                if self.config.showInterceptAlert {
-                    InterceptAlertPresenter.present(
-                        title: "已拦截 \(matched.name) 启动",
-                        reason: self.state.reason,
-                        state: self.state,
-                        coordinator: self
+                // 1. 若出口未通过检查：立即强杀阻止启动
+                if self.state.verdict.shouldBlockFreshLaunch {
+                    ProcessEnforcer.forceTerminateApp(app, target: matched)
+                    self.eventLogger.append(
+                        .appLaunchIntercepted,
+                        message: "拦截 Dock 启动 \(matched.name)：\(self.state.reason)",
+                        detectedIP: self.state.primaryIP,
+                        targetName: matched.name
                     )
+                    self.refreshEvents()
+
+                    if self.config.showInterceptAlert {
+                        InterceptAlertPresenter.present(
+                            title: "已拦截 \(matched.name) 启动",
+                            reason: self.state.reason,
+                            state: self.state,
+                            coordinator: self
+                        )
+                    }
+                    return
+                }
+
+                // 2. 出口已放行 (.allowed)：若开启了 Dock 自动注入时区，将未带对齐时区的顶层应用无缝重拉起
+                guard self.config.relaunchDockAppsWithTimezone,
+                      app.activationPolicy == .regular,
+                      let bundleURL = app.bundleURL,
+                      !bundleURL.path.contains("/Contents/"),
+                      let targetTZ = self.state.effectiveTimeZone,
+                      targetTZ != TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier() else {
+                    return
+                }
+
+                let pid = app.processIdentifier
+                if self.tzAlignedPIDs.contains(pid) {
+                    return
+                }
+                if let until = self.pendingTZRelaunchUntil[matched.id], until > Date() {
+                    self.tzAlignedPIDs.insert(pid)
+                    self.pendingTZRelaunchUntil.removeValue(forKey: matched.id)
+                    return
+                }
+
+                // 判定为从 Dock / Finder 裸启动：先登记防重入窗口，关闭裸进程，待 SingletonLock 释放后注入 TZ 重拉起
+                self.pendingTZRelaunchUntil[matched.id] = Date().addingTimeInterval(8.0)
+                _ = app.forceTerminate()
+
+                Task { @MainActor [weak self] in
+                    for _ in 0..<35 {
+                        if app.isTerminated { break }
+                        try? await Task.sleep(for: .milliseconds(40))
+                    }
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard let self else { return }
+                    _ = ProcessEnforcer.launchTargetWithEnvironment(
+                        matched,
+                        bundleURL: bundleURL,
+                        timeZoneIdentifier: targetTZ,
+                        createNewInstance: true
+                    )
+                    self.eventLogger.append(
+                        .timezoneAlignedLaunch,
+                        message: "检测到从 Dock 启动 \(matched.name)，已自动注入对齐时区 \(targetTZ)",
+                        detectedIP: self.state.primaryIP,
+                        targetName: matched.name
+                    )
+                    self.refreshEvents()
+                    self.setBanner("已自动为 \(matched.name) 注入时区 \(targetTZ)", isError: false)
                 }
             }
         }

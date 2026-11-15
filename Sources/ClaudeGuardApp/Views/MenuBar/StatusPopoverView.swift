@@ -291,6 +291,21 @@ struct StatusPopoverView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
+
+            HStack(spacing: 6) {
+                Image(systemName: coordinator.state.effectiveTimeZone != nil ? "clock.badge.checkmark" : "clock")
+                    .font(.system(size: 11))
+                    .foregroundStyle(coordinator.state.effectiveTimeZone != nil ? Color.accentColor : Color.secondary)
+                if let tz = coordinator.state.effectiveTimeZone {
+                    Text("客户端时区：\(TimezoneAlignmentResolver.formatDisplaySummary(for: tz))")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("客户端时区：跟随本机系统 (\(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier()))")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(10)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -444,6 +459,29 @@ struct StatusPopoverView: View {
                         }
                         .buttonStyle(.plain)
                         .help("点击切换是否守护 \(target.name)")
+                    }
+                }
+            }
+
+            let installedEnabledTargets = coordinator.config.enabledTargets.filter {
+                ProcessEnforcer.resolveInstalledAppURL(for: $0) != nil
+            }
+            if !installedEnabledTargets.isEmpty && !coordinator.state.verdict.shouldBlockFreshLaunch {
+                HStack(spacing: 6) {
+                    Text("带时区启动")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    ForEach(installedEnabledTargets) { target in
+                        Button {
+                            coordinator.launchGuardedAppAligned(target)
+                        } label: {
+                            Label(shortTargetTitle(target.name), systemImage: "play.fill")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .help("以对齐时区 (\(coordinator.state.effectiveTimeZone ?? "系统默认")) 启动 \(target.name)")
                     }
                 }
             }

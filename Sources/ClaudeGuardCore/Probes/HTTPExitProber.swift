@@ -24,17 +24,20 @@ public struct HTTPExitProber: Sendable {
     public struct Result: Sendable, Equatable {
         public var ip: String?
         public var countryCode: String?
+        public var colo: String?
         public var latencyMs: Int?
         public var errorDescription: String?
 
         public init(
             ip: String? = nil,
             countryCode: String? = nil,
+            colo: String? = nil,
             latencyMs: Int? = nil,
             errorDescription: String? = nil
         ) {
             self.ip = ip
             self.countryCode = countryCode
+            self.colo = colo
             self.latencyMs = latencyMs
             self.errorDescription = errorDescription
         }
@@ -50,18 +53,18 @@ public struct HTTPExitProber: Sendable {
     public init() {}
 
     /// 解析任意 HTTP IP 接口响应（支持 `cdn-cgi/trace` 键值对、JSON `{"ip": "..."}` 或纯文本 IP）。
-    public static func parseResponse(_ data: Data) -> (ip: String, countryCode: String?)? {
+    public static func parseResponse(_ data: Data) -> (ip: String, countryCode: String?, colo: String?)? {
         guard let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else {
             return nil
         }
 
-        // 1. Cloudflare trace 格式：ip=x.x.x.x \n loc=US
+        // 1. Cloudflare trace 格式：ip=x.x.x.x \n loc=US \n colo=LAX
         if text.contains("ip=") && text.contains("\n") {
             let trace = TargetTraceProber.parseTraceBody(text)
             if let ip = trace.ip, CIDRMatcher.isValidLiteralIP(ip) {
-                return (ip, trace.countryCode)
+                return (ip, trace.countryCode, trace.colo)
             }
         }
 
@@ -73,7 +76,7 @@ public struct HTTPExitProber: Sendable {
             if let ip = rawIP?.trimmingCharacters(in: .whitespacesAndNewlines),
                CIDRMatcher.isValidLiteralIP(ip) {
                 let cc = rawCountry?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-                return (ip, cc?.count == 2 ? cc : nil)
+                return (ip, cc?.count == 2 ? cc : nil, nil)
             }
         }
 
@@ -81,7 +84,7 @@ public struct HTTPExitProber: Sendable {
         let firstLine = String(text.split(whereSeparator: \.isNewline).first ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if CIDRMatcher.isValidLiteralIP(firstLine) {
-            return (firstLine, nil)
+            return (firstLine, nil, nil)
         }
 
         return nil
@@ -128,7 +131,7 @@ public struct HTTPExitProber: Sendable {
         let session = URLSession(configuration: cfg)
         defer { session.invalidateAndCancel() }
 
-        return await withTaskGroup(of: (String, String?, Int)?.self) { group in
+        return await withTaskGroup(of: (String, String?, String?, Int)?.self) { group in
             for endpoint in endpoints {
                 guard let url = URL(string: endpoint) else { continue }
                 group.addTask {
@@ -147,20 +150,20 @@ public struct HTTPExitProber: Sendable {
                             return nil
                         }
                         let ms = Int(Date().timeIntervalSince(reqStart) * 1000)
-                        return (parsed.ip, parsed.countryCode, ms)
+                        return (parsed.ip, parsed.countryCode, parsed.colo, ms)
                     } catch {
                         return nil
                     }
                 }
             }
 
-            var bestFallback: (String, String?, Int)?
+            var bestFallback: (String, String?, String?, Int)?
             while let next = await group.next() {
                 if let hit = next {
-                    // 若拿到带国家码的结果直接返回，否则先暂存首个 IP，若已有结果也可立即胜出
+                    // 若拿到带国家码的结果直接返回，否则先暂存首个 IP
                     if hit.1 != nil {
                         group.cancelAll()
-                        return Result(ip: hit.0, countryCode: hit.1, latencyMs: hit.2)
+                        return Result(ip: hit.0, countryCode: hit.1, colo: hit.2, latencyMs: hit.3)
                     }
                     if bestFallback == nil {
                         bestFallback = hit
@@ -169,7 +172,7 @@ public struct HTTPExitProber: Sendable {
             }
 
             if let hit = bestFallback {
-                return Result(ip: hit.0, countryCode: hit.1, latencyMs: hit.2)
+                return Result(ip: hit.0, countryCode: hit.1, colo: hit.2, latencyMs: hit.3)
             }
 
             let elapsed = Int(Date().timeIntervalSince(started) * 1000)

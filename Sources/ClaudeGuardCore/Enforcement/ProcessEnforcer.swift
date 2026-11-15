@@ -58,7 +58,7 @@ public enum ProcessEnforcer {
         return terminatedNames.sorted()
     }
 
-    /// 扫描 `ps -axo pid=,command=` 精确清理漏网的内嵌进程（例如 `Claude-3p/.../claude.app/Contents/MacOS/claude`）。
+    /// 扫描 `ps -axo pid=,comm=`（可执行文件路径）精确清理漏网的内嵌进程（例如 `Claude-3p/.../claude.app/Contents/MacOS/claude`）。
     @discardableResult
     public static func terminateMatchingSubprocesses(for targets: [GuardedTarget]) -> Set<String> {
         let keywordsWithTarget: [(keyword: String, targetName: String)] = targets.flatMap { t in
@@ -68,7 +68,8 @@ public enum ProcessEnforcer {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-axo", "pid=,command="]
+        // 仅取可执行文件路径（comm），不匹配命令行参数，避免参数里恰好含关键词的无关进程被误杀
+        proc.arguments = ["-axo", "pid=,comm="]
         let outPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = FileHandle.nullDevice
@@ -113,6 +114,43 @@ public enum ProcessEnforcer {
             }
         }
         return matchedTargetNames
+    }
+
+    /// 查找某个守护目标在本机已安装的顶层 `.app` 路径。
+    public static func resolveInstalledAppURL(for target: GuardedTarget) -> URL? {
+        for path in target.defaultAppPaths where FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        for prefix in target.bundleIDPrefixes where !prefix.isEmpty && !prefix.hasSuffix(".") {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: prefix) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// 通过 LaunchServices 启动目标 `.app` 并注入进程级 `TZ` 环境变量（不破坏应用签名，不影响系统全局时区）。
+    @discardableResult
+    public static func launchTargetWithEnvironment(
+        _ target: GuardedTarget,
+        bundleURL: URL? = nil,
+        timeZoneIdentifier: String?,
+        createNewInstance: Bool = false
+    ) -> Bool {
+        guard let targetURL = bundleURL ?? resolveInstalledAppURL(for: target) else {
+            return false
+        }
+        let openCfg = NSWorkspace.OpenConfiguration()
+        openCfg.activates = true
+        openCfg.createsNewApplicationInstance = createNewInstance
+        if let tz = timeZoneIdentifier, !tz.isEmpty {
+            openCfg.environment = [
+                "TZ": tz,
+                "CLAUDEGUARD_TZ": tz
+            ]
+        }
+        NSWorkspace.shared.openApplication(at: targetURL, configuration: openCfg)
+        return true
     }
 
     /// 启动本机已安装的 `v2rayN.app`（供拦截弹窗一键唤起）。

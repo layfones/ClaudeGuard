@@ -31,6 +31,8 @@ public enum AdmissionEvaluator {
         public var reason: String
         public var primaryIP: String?
         public var primaryCountryCode: String?
+        public var primaryColo: String?
+        public var effectiveTimeZone: String?
         public var matchedWhitelistLabel: String?
         public var jumpLatched: Bool
         public var jumpBeforeIP: String?
@@ -107,6 +109,16 @@ public enum AdmissionEvaluator {
         stateStore: AdmissionStateStore
     ) -> EvaluationOutput {
         let cfg = input.config
+        let fallbackCC = input.targetSnapshots.first(where: { $0.countryCode != nil })?.countryCode
+            ?? input.httpResult?.countryCode
+        let fallbackColo = input.targetSnapshots.first(where: { $0.colo != nil })?.colo
+            ?? input.httpResult?.colo
+        let resolvedTZ = TimezoneAlignmentResolver.resolve(
+            mode: cfg.timezoneAlignmentMode,
+            manualTimeZone: cfg.manualTimeZoneIdentifier,
+            countryCode: fallbackCC,
+            colo: fallbackColo
+        )
 
         // 1. 用户主动暂停防护
         if !cfg.protectionEnabled {
@@ -114,7 +126,9 @@ public enum AdmissionEvaluator {
                 verdict: .paused,
                 reason: "防护已由用户手动暂停，网络处于放行状态。",
                 primaryIP: input.httpResult?.ip ?? input.stunResult?.ip,
-                primaryCountryCode: input.httpResult?.countryCode,
+                primaryCountryCode: fallbackCC,
+                primaryColo: fallbackColo,
+                effectiveTimeZone: resolvedTZ,
                 matchedWhitelistLabel: nil,
                 jumpLatched: false,
                 jumpBeforeIP: nil,
@@ -162,23 +176,50 @@ public enum AdmissionEvaluator {
             ?? stunSnap?.ip
         let primaryCC = evaluatedTargets.first(where: { $0.countryCode != nil })?.countryCode
             ?? input.httpResult?.countryCode
+        let primaryColo = evaluatedTargets.first(where: { $0.colo != nil })?.colo
+            ?? input.httpResult?.colo
+        let activeTZ = TimezoneAlignmentResolver.resolve(
+            mode: cfg.timezoneAlignmentMode,
+            manualTimeZone: cfg.manualTimeZoneIdentifier,
+            countryCode: primaryCC,
+            colo: primaryColo
+        )
         let primaryLabel = httpSnap?.matchedEntryLabel
             ?? stunSnap?.matchedEntryLabel
 
-        if !hasAnyRule {
-            return EvaluationOutput(
-                verdict: .blocked,
-                reason: "尚未配置任何有效白名单规则，默认锁死网络防直连泄漏。",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: nil,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
+        func makeOutput(
+            verdict: GuardVerdict,
+            reason: String,
+            ip: String? = primaryIP,
+            cc: String? = primaryCC,
+            label: String? = nil,
+            jumpLatched: Bool = false,
+            jumpBefore: String? = nil,
+            jumpAfter: String? = nil,
+            routeLeakNow: Bool = false
+        ) -> EvaluationOutput {
+            EvaluationOutput(
+                verdict: verdict,
+                reason: reason,
+                primaryIP: ip,
+                primaryCountryCode: cc,
+                primaryColo: primaryColo,
+                effectiveTimeZone: activeTZ,
+                matchedWhitelistLabel: label,
+                jumpLatched: jumpLatched,
+                jumpBeforeIP: jumpBefore,
+                jumpAfterIP: jumpAfter,
+                routeLeakDetectedNow: routeLeakNow,
                 httpSnapshot: httpSnap,
                 stunSnapshot: stunSnap,
                 targetSnapshots: evaluatedTargets
+            )
+        }
+
+        if !hasAnyRule {
+            return makeOutput(
+                verdict: .blocked,
+                reason: "尚未配置任何有效白名单规则，默认锁死网络防直连泄漏。"
             )
         }
 
@@ -217,73 +258,31 @@ public enum AdmissionEvaluator {
         }
 
         if let leakReason = latchOutcome.routeLeak {
-            return EvaluationOutput(
-                verdict: .blocked,
-                reason: leakReason,
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: primaryLabel,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
-            )
+            return makeOutput(verdict: .blocked, reason: leakReason, label: primaryLabel)
         }
 
         if latchOutcome.latched {
             let beforeStr = latchOutcome.jumpBefore ?? "原节点"
             let afterStr = latchOutcome.jumpAfter ?? (primaryIP ?? "新节点")
-            return EvaluationOutput(
+            return makeOutput(
                 verdict: .blocked,
                 reason: "检测到出口 IP 发生跳变（\(beforeStr) → \(afterStr)），已自动锁死，请确认是否信任新出口。",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: primaryLabel,
+                label: primaryLabel,
                 jumpLatched: true,
-                jumpBeforeIP: latchOutcome.jumpBefore,
-                jumpAfterIP: latchOutcome.jumpAfter,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
+                jumpBefore: latchOutcome.jumpBefore,
+                jumpAfter: latchOutcome.jumpAfter
             )
         }
 
         // 5. 明确的未通过（已拿到 IP，但不符合规则）优先判为 .blocked（高于另一通道超时的 .offline）
         if let hs = httpSnap, hs.ip != nil, !hs.passed {
-            return EvaluationOutput(
-                verdict: .blocked,
-                reason: hs.errorDescription ?? "HTTP 出口未通过白名单检查",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: nil,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
-            )
+            return makeOutput(verdict: .blocked, reason: hs.errorDescription ?? "HTTP 出口未通过白名单检查")
         }
 
         if let ss = stunSnap, ss.ip != nil, !ss.passed {
-            return EvaluationOutput(
+            return makeOutput(
                 verdict: .blocked,
-                reason: ss.errorDescription ?? "UDP STUN 出口 (\(ss.ip!)) 未通过白名单检查（可能存在 UDP 直连泄漏）",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: nil,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
+                reason: ss.errorDescription ?? "UDP STUN 出口 (\(ss.ip!)) 未通过白名单检查（可能存在 UDP 直连泄漏）"
             )
         }
 
@@ -298,73 +297,36 @@ public enum AdmissionEvaluator {
                         persisted.routeLeakMessage = leakMsg
                     }
                 }
-                return EvaluationOutput(
+                return makeOutput(
                     verdict: .blocked,
                     reason: leakMsg,
-                    primaryIP: failedTarget.ip ?? primaryIP,
-                    primaryCountryCode: failedTarget.countryCode ?? primaryCC,
-                    matchedWhitelistLabel: nil,
-                    jumpLatched: false,
-                    jumpBeforeIP: nil,
-                    jumpAfterIP: nil,
-                    routeLeakDetectedNow: generalPassed,
-                    httpSnapshot: httpSnap,
-                    stunSnapshot: stunSnap,
-                    targetSnapshots: evaluatedTargets
+                    ip: failedTarget.ip ?? primaryIP,
+                    cc: failedTarget.countryCode ?? primaryCC,
+                    routeLeakNow: generalPassed
                 )
             }
         }
 
         // 6. 检查必需通道是否缺失结果（超时 / 断网 → .offline Fail-closed）
         if cfg.exitCheckMode.includesHTTP && httpSnap?.ip == nil {
-            return EvaluationOutput(
+            return makeOutput(
                 verdict: .offline,
-                reason: httpSnap?.errorDescription ?? "暂时无法确认 HTTP 出口 IP，默认保持域名封锁。",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: nil,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
+                reason: httpSnap?.errorDescription ?? "暂时无法确认 HTTP 出口 IP，默认保持域名封锁。"
             )
         }
 
         if cfg.exitCheckMode.includesSTUN && stunSnap?.ip == nil {
-            return EvaluationOutput(
+            return makeOutput(
                 verdict: .offline,
-                reason: stunSnap?.errorDescription ?? "暂时无法确认 UDP STUN 出口 IP，默认保持域名封锁。",
-                primaryIP: primaryIP,
-                primaryCountryCode: primaryCC,
-                matchedWhitelistLabel: nil,
-                jumpLatched: false,
-                jumpBeforeIP: nil,
-                jumpAfterIP: nil,
-                routeLeakDetectedNow: false,
-                httpSnapshot: httpSnap,
-                stunSnapshot: stunSnap,
-                targetSnapshots: evaluatedTargets
+                reason: stunSnap?.errorDescription ?? "暂时无法确认 UDP STUN 出口 IP，默认保持域名封锁。"
             )
         }
 
         if input.verifyTargetTraces {
             if let missingTarget = evaluatedTargets.first(where: { $0.ip == nil }) {
-                return EvaluationOutput(
+                return makeOutput(
                     verdict: .offline,
-                    reason: "\(missingTarget.targetName) 链路探测超时（\(missingTarget.errorDescription ?? "未响应")），暂不放行。",
-                    primaryIP: primaryIP,
-                    primaryCountryCode: primaryCC,
-                    matchedWhitelistLabel: nil,
-                    jumpLatched: false,
-                    jumpBeforeIP: nil,
-                    jumpAfterIP: nil,
-                    routeLeakDetectedNow: false,
-                    httpSnapshot: httpSnap,
-                    stunSnapshot: stunSnap,
-                    targetSnapshots: evaluatedTargets
+                    reason: "\(missingTarget.targetName) 链路探测超时（\(missingTarget.errorDescription ?? "未响应")），暂不放行。"
                 )
             }
         }
@@ -385,20 +347,7 @@ public enum AdmissionEvaluator {
             summaryReason = "所有受检通道均符合白名单规则"
         }
 
-        return EvaluationOutput(
-            verdict: .allowed,
-            reason: summaryReason,
-            primaryIP: primaryIP,
-            primaryCountryCode: primaryCC,
-            matchedWhitelistLabel: primaryLabel,
-            jumpLatched: false,
-            jumpBeforeIP: nil,
-            jumpAfterIP: nil,
-            routeLeakDetectedNow: false,
-            httpSnapshot: httpSnap,
-            stunSnapshot: stunSnap,
-            targetSnapshots: evaluatedTargets
-        )
+        return makeOutput(verdict: .allowed, reason: summaryReason, label: primaryLabel)
     }
 
     /// 用户手动点击「信任当前新出口」或「重试分流检测」时调用：用新探测到的快照更新基准并解除锁存。

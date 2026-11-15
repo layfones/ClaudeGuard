@@ -96,7 +96,7 @@ public struct GuardedTarget: Codable, Sendable, Equatable, Identifiable {
         ],
         processPathKeywords: [
             "/Claude.app/Contents/",
-            "/claude-code/",
+            "/Application Support/Claude/claude-code/",
             "/claude.app/Contents/MacOS/claude"
         ],
         defaultAppPaths: [
@@ -115,8 +115,10 @@ public struct GuardedTarget: Codable, Sendable, Equatable, Identifiable {
             "statsig.anthropic.com"
         ],
         dedicatedPFCIDRs: [
-            "160.79.104.0/24",
-            "2607:6bc0::/32"
+            // 取自 Anthropic 官方公布的 inbound 地址段（platform.claude.com/docs/en/api/ip-addresses）
+            "160.79.104.0/23",
+            "153.61.224.0/22",
+            "2607:6bc0::/48"
         ],
         pfResolveDomains: [
             "claude.ai", "www.claude.ai", "app.claude.ai", "api.claude.ai", "auth.claude.ai",

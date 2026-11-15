@@ -81,15 +81,21 @@ private func evaluateLiveReadOnly(config: GuardConfig, paths: GuardPaths) async 
     )
 }
 
-private func currentVerdictForCLI(config: GuardConfig, paths: GuardPaths) async -> (verdict: GuardVerdict, reason: String, ip: String?) {
+private func currentVerdictForCLI(config: GuardConfig, paths: GuardPaths) async -> (verdict: GuardVerdict, reason: String, ip: String?, timeZone: String?) {
     if !config.protectionEnabled {
-        return (.paused, "防护已暂停", nil)
+        let manualOrDisabled = TimezoneAlignmentResolver.resolve(
+            mode: config.timezoneAlignmentMode,
+            manualTimeZone: config.manualTimeZoneIdentifier,
+            countryCode: nil,
+            colo: nil
+        )
+        return (.paused, "防护已暂停", nil, manualOrDisabled)
     }
     if let shared = SharedStateStore(paths: paths).read(), shared.isFresh(for: config) {
-        return (shared.verdict, shared.reason, shared.primaryIP)
+        return (shared.verdict, shared.reason, shared.primaryIP, shared.effectiveTimeZone)
     }
     let live = await evaluateLiveReadOnly(config: config, paths: paths)
-    return (live.verdict, live.reason, live.primaryIP)
+    return (live.verdict, live.reason, live.primaryIP, live.effectiveTimeZone)
 }
 
 private func runClaudeCLIWrapper(arguments: [String]) async -> Int32 {
@@ -106,8 +112,10 @@ private func runClaudeCLIWrapper(arguments: [String]) async -> Int32 {
         return 1
     }
 
+    var resolvedTimeZoneForSession: String?
     if config.protectionEnabled && config.protectClaudeCLI {
         let preflight = await currentVerdictForCLI(config: config, paths: paths)
+        resolvedTimeZoneForSession = preflight.timeZone
         if preflight.verdict.shouldBlockFreshLaunch {
             logger.append(
                 .cliSessionBlocked,
@@ -122,6 +130,9 @@ private func runClaudeCLIWrapper(arguments: [String]) async -> Int32 {
             )
             return 1
         }
+    } else if config.timezoneAlignmentMode != .disabled {
+        let check = await currentVerdictForCLI(config: config, paths: paths)
+        resolvedTimeZoneForSession = check.timeZone
     }
 
     let child = Process()
@@ -129,6 +140,9 @@ private func runClaudeCLIWrapper(arguments: [String]) async -> Int32 {
     child.arguments = arguments
 
     var env = ProcessInfo.processInfo.environment
+    if let tz = resolvedTimeZoneForSession, !tz.isEmpty {
+        env["TZ"] = tz
+    }
     if config.blockClaudeAutoUpdates {
         env["DISABLE_AUTO_UPDATE"] = "1"
         env["CLAUDE_DISABLE_AUTO_UPDATE"] = "1"
@@ -256,9 +270,12 @@ private func runManagementCommand(arguments: [String]) async -> Int32 {
                 "reason": eval.reason,
                 "http_ip": h.ip as Any,
                 "http_country": h.countryCode as Any,
+                "http_colo": h.colo as Any,
                 "http_latency_ms": h.latencyMs as Any,
                 "stun_ip": s.ip as Any,
                 "stun_latency_ms": s.latencyMs as Any,
+                "system_timezone": TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier(),
+                "effective_timezone": eval.effectiveTimeZone as Any,
                 "proxy_env": proxyEnv.summaryBadge,
                 "v2rayn_installed": proxyEnv.isV2rayNInstalled,
                 "v2rayn_running": proxyEnv.isV2rayNRunning,
@@ -267,6 +284,7 @@ private func runManagementCommand(arguments: [String]) async -> Int32 {
                     "name": $0.targetName,
                     "ip": $0.ip as Any,
                     "country": $0.countryCode as Any,
+                    "colo": $0.colo as Any,
                     "latency_ms": $0.latencyMs as Any,
                     "error": $0.errorDescription as Any
                 ] }
@@ -283,6 +301,8 @@ private func runManagementCommand(arguments: [String]) async -> Int32 {
         print("当前判定：\(eval.verdict.title)")
         print("判定原因：\(eval.reason)")
         print("代理环境：\(proxyEnv.summaryBadge)")
+        let tzDesc = eval.effectiveTimeZone.map { TimezoneAlignmentResolver.formatDisplaySummary(for: $0) } ?? "未开启（保持系统时区）"
+        print("时区对齐：\(tzDesc) [本机系统：\(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())]")
         print("HTTP 出口：\(h.ip ?? "未获取") \(h.countryCode.map { "(\($0))" } ?? "") \(h.latencyMs.map { "[\($0)ms]" } ?? "")")
         print("STUN 出口：\(s.ip ?? "未获取") \(s.latencyMs.map { "[\($0)ms]" } ?? "")")
         for t in traces {

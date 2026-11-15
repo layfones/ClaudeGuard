@@ -162,6 +162,8 @@ struct LogsAndResetPane: View {
             return "arrow.left.arrow.right.circle.fill"
         case .helperInstalled, .ipJumpAcknowledged:
             return "checkmark.seal.fill"
+        case .timezoneAlignedLaunch:
+            return "clock.badge.checkmark.fill"
         case .emergencyUnblocked:
             return "lock.open.fill"
         default:
@@ -175,7 +177,7 @@ struct LogsAndResetPane: View {
             return .red
         case .ipJumpLatched, .probeWarning:
             return .orange
-        case .helperInstalled, .ipJumpAcknowledged:
+        case .helperInstalled, .ipJumpAcknowledged, .timezoneAlignedLaunch:
             return .green
         default:
             return .accentColor

@@ -21,7 +21,11 @@
    - 并行校验 **通用 HTTP 出口** + **UDP STUN 出口（RFC 5389）** + **各目标真实链路（`claude.ai/cdn-cgi/trace`、`chatgpt.com/cdn-cgi/trace` 等）**。
    - 支持 **固定 IP / CIDR 白名单（IPv4 & IPv6，每条可独立备注与启停）**、**ISO 二位国家/地区码**、以及 **持久化 IP 跳变锁**（出口跳变到其他白名单节点也会锁死，直至手动确认信任）。
 
-4. **Claude 专属全链路覆盖**
+4. **进程级时区自动对齐（不修改 Mac 系统时区）**
+   - 根据当前代理出口的 `loc` 国家码与 Cloudflare `colo` 边缘机房代码，自动推导自洽的当地 IANA 时区（如 `KR` → `Asia/Seoul`、`US + LAX` → `America/Los_Angeles`、`US + EWR` → `America/New_York`，也支持手动指定固定时区）。
+   - 同时作用于**桌面端应用**（支持从菜单栏一键带时区启动，或直接点 Dock 图标时自动通过 LaunchServices 无损注入 `TZ` 重拉起）与**终端 `claude` CLI 会话**，整台 Mac 的系统时间、日历与微信保持北京时间不变。
+
+5. **Claude 专属全链路覆盖**
    - 同时覆盖 `Claude.app`（`com.anthropic.claudefordesktop`）、桌面端内嵌的 `Claude-3p/.../claude.app`（`com.anthropic.claude-code`）以及终端独立安装的 `claude` CLI（原生编译薄包装器启动开销 < 5ms，60 秒自愈巡检防更新覆盖）。
    - 支持一键**禁止 Claude 自动更新**（`ShipIt` 目录 `uchg` 锁定 + 更新域名屏蔽 + CLI 环境变量注入）。
 

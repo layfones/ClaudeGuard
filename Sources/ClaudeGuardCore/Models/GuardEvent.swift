@@ -11,6 +11,7 @@ public enum GuardEventKind: String, Codable, Sendable {
     case networkSyncApplied = "network_sync_applied"
     case helperInstalled = "helper_installed"
     case emergencyUnblocked = "emergency_unblocked"
+    case timezoneAlignedLaunch = "timezone_aligned_launch"
     case probeWarning = "probe_warning"
 
     public var label: String {
@@ -25,6 +26,7 @@ public enum GuardEventKind: String, Codable, Sendable {
         case .networkSyncApplied: return "规则同步"
         case .helperInstalled: return "防线部署"
         case .emergencyUnblocked: return "紧急解封"
+        case .timezoneAlignedLaunch: return "时区对齐"
         case .probeWarning: return "探测异常"
         }
     }

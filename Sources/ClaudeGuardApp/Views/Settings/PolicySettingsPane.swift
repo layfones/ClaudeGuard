@@ -160,6 +160,90 @@ struct PolicySettingsPane: View {
             }
 
             Section {
+                Picker("客户端时区策略", selection: Binding(
+                    get: { coordinator.config.timezoneAlignmentMode },
+                    set: { mode in
+                        coordinator.updateConfig { $0.timezoneAlignmentMode = mode }
+                    }
+                )) {
+                    ForEach(TimezoneAlignmentMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+
+                HStack {
+                    Text("当前生效状态")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if let tz = coordinator.state.effectiveTimeZone {
+                        Text("本机保持 \(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())  →  客户端注入 \(TimezoneAlignmentResolver.formatDisplaySummary(for: tz))")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("沿用本机时区 \(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if coordinator.config.timezoneAlignmentMode == .manual {
+                    Picker("常用目标时区", selection: Binding(
+                        get: { coordinator.config.manualTimeZoneIdentifier },
+                        set: { tz in
+                            coordinator.updateConfig { $0.manualTimeZoneIdentifier = tz }
+                        }
+                    )) {
+                        ForEach(TimezoneAlignmentResolver.commonTimeZones, id: \.id) { item in
+                            Text(item.label).tag(item.id)
+                        }
+                        if !TimezoneAlignmentResolver.commonTimeZones.contains(where: { $0.id == coordinator.config.manualTimeZoneIdentifier }) {
+                            Text(coordinator.config.manualTimeZoneIdentifier).tag(coordinator.config.manualTimeZoneIdentifier)
+                        }
+                    }
+
+                    HStack {
+                        Text("自定义 IANA 时区")
+                        TextField("例如 America/Los_Angeles 或 Asia/Seoul", text: Binding(
+                            get: { coordinator.config.manualTimeZoneIdentifier },
+                            set: { raw in
+                                coordinator.updateConfig({ $0.manualTimeZoneIdentifier = raw }, triggerCheck: false)
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+
+                        Button("校验并应用") {
+                            coordinator.triggerRecheck()
+                        }
+                    }
+
+                    if !TimezoneAlignmentResolver.isValidTimeZoneIdentifier(coordinator.config.manualTimeZoneIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        Text("无效的 IANA 时区名称，请使用形如 America/Los_Angeles、Asia/Seoul、Europe/London 的标准标识符。")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                if coordinator.config.timezoneAlignmentMode != .disabled {
+                    Toggle(isOn: Binding(
+                        get: { coordinator.config.relaunchDockAppsWithTimezone },
+                        set: { val in
+                            coordinator.updateConfig({ $0.relaunchDockAppsWithTimezone = val }, triggerCheck: false)
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("点击 Dock 栏启动受保护应用时自动重拉起并注入时区")
+                            Text("开启后，即使直接点击 Dock 栏上的原版 Claude 或 ChatGPT 图标，ClaudeGuard 也会自动通过 LaunchServices 为其补齐进程级 TZ 时区，同时完全不修改 Mac 系统时间与微信/日历。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("进程级时区自动对齐（不修改整机系统时区）")
+            }
+
+            Section {
                 Toggle(isOn: Binding(
                     get: { coordinator.config.detectIPChange },
                     set: { enabled in

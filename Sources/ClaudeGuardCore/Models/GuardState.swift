@@ -84,6 +84,7 @@ public struct TargetProbeSnapshot: Codable, Sendable, Equatable, Identifiable {
     public var targetName: String
     public var ip: String?
     public var countryCode: String?
+    public var colo: String?
     public var matchedRuleSummary: String?
     public var passed: Bool
     public var latencyMs: Int?
@@ -94,6 +95,7 @@ public struct TargetProbeSnapshot: Codable, Sendable, Equatable, Identifiable {
         targetName: String,
         ip: String? = nil,
         countryCode: String? = nil,
+        colo: String? = nil,
         matchedRuleSummary: String? = nil,
         passed: Bool = false,
         latencyMs: Int? = nil,
@@ -103,6 +105,7 @@ public struct TargetProbeSnapshot: Codable, Sendable, Equatable, Identifiable {
         self.targetName = targetName
         self.ip = ip
         self.countryCode = countryCode
+        self.colo = colo
         self.matchedRuleSummary = matchedRuleSummary
         self.passed = passed
         self.latencyMs = latencyMs
@@ -152,6 +155,8 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
     public var reason: String
     public var primaryIP: String?
     public var primaryCountryCode: String?
+    public var primaryColo: String?
+    public var effectiveTimeZone: String?
     public var matchedWhitelistLabel: String?
     public var jumpLatched: Bool
     public var jumpBeforeIP: String?
@@ -171,6 +176,8 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
         reason: String = "正在初始化出口检测…",
         primaryIP: String? = nil,
         primaryCountryCode: String? = nil,
+        primaryColo: String? = nil,
+        effectiveTimeZone: String? = nil,
         matchedWhitelistLabel: String? = nil,
         jumpLatched: Bool = false,
         jumpBeforeIP: String? = nil,
@@ -189,6 +196,8 @@ public struct SharedGuardState: Codable, Sendable, Equatable {
         self.reason = reason
         self.primaryIP = primaryIP
         self.primaryCountryCode = primaryCountryCode
+        self.primaryColo = primaryColo
+        self.effectiveTimeZone = effectiveTimeZone
         self.matchedWhitelistLabel = matchedWhitelistLabel
         self.jumpLatched = jumpLatched
         self.jumpBeforeIP = jumpBeforeIP

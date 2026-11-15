@@ -122,6 +122,7 @@ public struct TargetTraceProber: Sendable {
                         targetName: target.name,
                         ip: ip,
                         countryCode: trace.countryCode,
+                        colo: trace.colo,
                         passed: false, // 由 AdmissionEvaluator 填充最终匹配结论
                         latencyMs: ms
                     )
@@ -135,6 +136,7 @@ public struct TargetTraceProber: Sendable {
                     targetName: target.name,
                     ip: parsed.ip,
                     countryCode: parsed.countryCode,
+                    colo: parsed.colo,
                     passed: false,
                     latencyMs: ms
                 )

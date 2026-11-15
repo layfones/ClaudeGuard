@@ -234,13 +234,87 @@ final class ClaudeGuardCoreTests: XCTestCase {
             enabledTargets: targets
         )
         // PF 表只包含 Anthropic 专属 CIDR，绝不误纳入 ChatGPT 的共享 Cloudflare CDN IP
-        XCTAssertTrue(pf.contains("160.79.104.0/24"))
-        XCTAssertTrue(pf.contains("2607:6bc0::/32"))
+        XCTAssertTrue(pf.contains("160.79.104.0/23"))
+        XCTAssertTrue(pf.contains("2607:6bc0::/48"))
 
         let emptyPF = NetworkBlockStaging.buildStagedPFEntries(
             blockTargetDomains: false,
             enabledTargets: targets
         )
         XCTAssertEqual(emptyPF, "")
+    }
+
+    // MARK: - 5. 进程级智能时区推导测试
+
+    func testTimezoneAlignmentResolver() {
+        // 单时区国家严格以 loc 国家码为准（哪怕邻近 CDN 落到东京 NRT，KR 仍应返回 Asia/Seoul）
+        XCTAssertEqual(
+            TimezoneAlignmentResolver.resolve(mode: .autoFromExit, manualTimeZone: "", countryCode: "KR", colo: "NRT"),
+            "Asia/Seoul"
+        )
+        // 多时区大国按 Cloudflare 边缘机房精确区分东西海岸与中部
+        XCTAssertEqual(
+            TimezoneAlignmentResolver.resolve(mode: .autoFromExit, manualTimeZone: "", countryCode: "US", colo: "LAX"),
+            "America/Los_Angeles"
+        )
+        XCTAssertEqual(
+            TimezoneAlignmentResolver.resolve(mode: .autoFromExit, manualTimeZone: "", countryCode: "US", colo: "EWR"),
+            "America/New_York"
+        )
+        XCTAssertEqual(
+            TimezoneAlignmentResolver.resolve(mode: .autoFromExit, manualTimeZone: "", countryCode: "US", colo: "ORD"),
+            "America/Chicago"
+        )
+        // 手动模式校验合法与非法 IANA 时区
+        XCTAssertEqual(
+            TimezoneAlignmentResolver.resolve(mode: .manual, manualTimeZone: "Asia/Tokyo", countryCode: "US", colo: "LAX"),
+            "Asia/Tokyo"
+        )
+        XCTAssertNil(
+            TimezoneAlignmentResolver.resolve(mode: .manual, manualTimeZone: "Invalid/Zone_123", countryCode: "US", colo: "LAX")
+        )
+        // 关闭模式返回 nil
+        XCTAssertNil(
+            TimezoneAlignmentResolver.resolve(mode: .disabled, manualTimeZone: "Asia/Seoul", countryCode: "KR", colo: "ICN")
+        )
+        XCTAssertFalse(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier().isEmpty)
+    }
+    // MARK: - 6. 进程匹配边界与内置预设刷新
+
+    func testClaudePresetKeywordsDoNotMatchUnrelatedPaths() {
+        let kws = GuardedTarget.claudePreset.processPathKeywords
+        let unrelated = "/Users/dev/projects/claude-code/build/tool"
+        XCTAssertFalse(kws.contains { unrelated.contains($0) })
+        let embedded = "/Users/dev/Library/Application Support/Claude/claude-code/2.1.0/claude.app/Contents/MacOS/claude"
+        XCTAssertTrue(kws.contains { embedded.contains($0) })
+    }
+
+    func testPFEntriesUseOfficialInboundRanges() {
+        let entries = NetworkBlockStaging.buildStagedPFEntries(
+            blockTargetDomains: true,
+            enabledTargets: [GuardedTarget.claudePreset]
+        )
+        XCTAssertTrue(entries.contains("160.79.104.0/23"))
+        XCTAssertTrue(entries.contains("153.61.224.0/22"))
+        XCTAssertTrue(entries.contains("2607:6bc0::/48"))
+        XCTAssertFalse(entries.contains("160.79.104.0/24"))
+    }
+
+    func testLoadRefreshesBuiltInPresetsButKeepsEnabledFlag() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("cg-test-\(UUID().uuidString)")
+        let paths = GuardPaths(appSupportDir: tmp)
+        let store = ConfigStore(paths: paths)
+        var cfg = GuardConfig()
+        if let i = cfg.targets.firstIndex(where: { $0.id == "chatgpt" }) { cfg.targets[i].isEnabled = true }
+        if let i = cfg.targets.firstIndex(where: { $0.id == "claude" }) {
+            cfg.targets[i].processPathKeywords = ["/claude-code/"]
+            cfg.targets[i].dedicatedPFCIDRs = ["160.79.104.0/24"]
+        }
+        try store.save(cfg)
+        let loaded = store.load()
+        let claude = try XCTUnwrap(loaded.targets.first { $0.id == "claude" })
+        XCTAssertFalse(claude.processPathKeywords.contains("/claude-code/"))
+        XCTAssertTrue(claude.dedicatedPFCIDRs.contains("160.79.104.0/23"))
+        XCTAssertTrue(try XCTUnwrap(loaded.targets.first { $0.id == "chatgpt" }).isEnabled)
     }
 }

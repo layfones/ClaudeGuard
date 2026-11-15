@@ -119,6 +119,11 @@ public struct GuardConfig: Codable, Sendable, Equatable {
     public var useCustomHTTPProxy: Bool
     public var customHTTPProxyURL: String
 
+    /// 进程级时区对齐配置（不影响 macOS 系统时区）
+    public var timezoneAlignmentMode: TimezoneAlignmentMode
+    public var manualTimeZoneIdentifier: String
+    public var relaunchDockAppsWithTimezone: Bool
+
     /// 首次引导完成标记
     public var onboardingCompleted: Bool
 
@@ -141,6 +146,9 @@ public struct GuardConfig: Codable, Sendable, Equatable {
         blockClaudeAutoUpdates: Bool = true,
         useCustomHTTPProxy: Bool = false,
         customHTTPProxyURL: String = "",
+        timezoneAlignmentMode: TimezoneAlignmentMode = .autoFromExit,
+        manualTimeZoneIdentifier: String = "America/Los_Angeles",
+        relaunchDockAppsWithTimezone: Bool = true,
         onboardingCompleted: Bool = false,
         targets: [GuardedTarget] = GuardedTarget.defaultTargets
     ) {
@@ -159,8 +167,35 @@ public struct GuardConfig: Codable, Sendable, Equatable {
         self.blockClaudeAutoUpdates = blockClaudeAutoUpdates
         self.useCustomHTTPProxy = useCustomHTTPProxy
         self.customHTTPProxyURL = customHTTPProxyURL
+        self.timezoneAlignmentMode = timezoneAlignmentMode
+        self.manualTimeZoneIdentifier = manualTimeZoneIdentifier
+        self.relaunchDockAppsWithTimezone = relaunchDockAppsWithTimezone
         self.onboardingCompleted = onboardingCompleted
         self.targets = targets
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.configRevision = try c.decodeIfPresent(UInt64.self, forKey: .configRevision) ?? 1
+        self.protectionEnabled = try c.decodeIfPresent(Bool.self, forKey: .protectionEnabled) ?? true
+        self.exitCheckMode = try c.decodeIfPresent(ExitCheckMode.self, forKey: .exitCheckMode) ?? .all
+        self.admissionRuleMode = try c.decodeIfPresent(AdmissionRuleMode.self, forKey: .admissionRuleMode) ?? .ipOnly
+        self.allowedIPs = try c.decodeIfPresent([AllowedIPEntry].self, forKey: .allowedIPs) ?? []
+        self.allowedRegions = try c.decodeIfPresent([String].self, forKey: .allowedRegions) ?? []
+        self.detectIPChange = try c.decodeIfPresent(Bool.self, forKey: .detectIPChange) ?? false
+        self.pollIntervalSeconds = try c.decodeIfPresent(Double.self, forKey: .pollIntervalSeconds) ?? 3.0
+        self.showInterceptAlert = try c.decodeIfPresent(Bool.self, forKey: .showInterceptAlert) ?? true
+        self.launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
+        self.protectClaudeCLI = try c.decodeIfPresent(Bool.self, forKey: .protectClaudeCLI) ?? true
+        self.realClaudeCLIPath = try c.decodeIfPresent(String.self, forKey: .realClaudeCLIPath)
+        self.blockClaudeAutoUpdates = try c.decodeIfPresent(Bool.self, forKey: .blockClaudeAutoUpdates) ?? true
+        self.useCustomHTTPProxy = try c.decodeIfPresent(Bool.self, forKey: .useCustomHTTPProxy) ?? false
+        self.customHTTPProxyURL = try c.decodeIfPresent(String.self, forKey: .customHTTPProxyURL) ?? ""
+        self.timezoneAlignmentMode = try c.decodeIfPresent(TimezoneAlignmentMode.self, forKey: .timezoneAlignmentMode) ?? .autoFromExit
+        self.manualTimeZoneIdentifier = try c.decodeIfPresent(String.self, forKey: .manualTimeZoneIdentifier) ?? "America/Los_Angeles"
+        self.relaunchDockAppsWithTimezone = try c.decodeIfPresent(Bool.self, forKey: .relaunchDockAppsWithTimezone) ?? true
+        self.onboardingCompleted = try c.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
+        self.targets = try c.decodeIfPresent([GuardedTarget].self, forKey: .targets) ?? GuardedTarget.defaultTargets
     }
 
     public var enabledTargets: [GuardedTarget] {
@@ -209,6 +244,14 @@ public final class ConfigStore: Sendable {
         let existingIDs = Set(decoded.targets.map(\.id))
         for preset in GuardedTarget.defaultTargets where !existingIDs.contains(preset.id) {
             decoded.targets.append(preset)
+        }
+        // 内置预设的进程匹配与网络封禁字段随程序版本刷新（保留用户的启用开关），避免旧配置沿用过宽/过时的规则
+        for idx in decoded.targets.indices where decoded.targets[idx].isBuiltIn {
+            if let preset = GuardedTarget.defaultTargets.first(where: { $0.id == decoded.targets[idx].id }) {
+                var refreshed = preset
+                refreshed.isEnabled = decoded.targets[idx].isEnabled
+                decoded.targets[idx] = refreshed
+            }
         }
         return decoded
     }
