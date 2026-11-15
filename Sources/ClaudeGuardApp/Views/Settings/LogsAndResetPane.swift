@@ -31,17 +31,12 @@ struct LogsAndResetPane: View {
         Form {
             Section {
                 HStack {
-                    Toggle("仅看拦截与熔断记录", isOn: $onlyInterceptEvents)
+                    Toggle("只看拦截", isOn: $onlyInterceptEvents)
                         .toggleStyle(.checkbox)
 
                     Spacer()
 
-                    Button("刷新") {
-                        coordinator.refreshEvents()
-                    }
-                    .controlSize(.small)
-
-                    Button("清空日志") {
+                    Button("清空") {
                         coordinator.clearEvents()
                     }
                     .controlSize(.small)
@@ -49,7 +44,7 @@ struct LogsAndResetPane: View {
                 }
 
                 if filteredEvents.isEmpty {
-                    Text("暂无符合筛选条件的事件日志。")
+                    Text(onlyInterceptEvents ? "还没有拦截记录。" : "还没有记录。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -64,31 +59,30 @@ struct LogsAndResetPane: View {
                         }
                         .padding(.vertical, 4)
                     }
-                    .frame(height: 240)
+                    .frame(height: 280)
                 }
             } header: {
-                Text("安全拦截与状态变更时间线（最近 \(filteredEvents.count) 条）")
+                Text("拦截记录")
             }
 
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("紧急解除全部网络封锁")
-                        Text("立即暂停防护，清除 /etc/hosts 中的受管段落、清空 pf 子锚点规则并解冻更新目录。")
+                        Text("解除全部封锁")
+                        Text("暂停守护，并移除 ClaudeGuard 写入的域名封锁和防火墙规则。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("紧急解封网络") {
+                    Button("解除封锁") {
                         coordinator.emergencyUnblock()
                     }
                 }
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("彻底无残留卸载 ClaudeGuard")
-                            .foregroundStyle(.red)
-                        Text("一键还原 /etc/hosts、释放 pf 防火墙锚点、恢复原版 claude 命令软链、移除开机自启与系统 LaunchDaemon 服务并退出。")
+                        Text("卸载 ClaudeGuard")
+                        Text("还原所有网络设置和 claude 命令，移除后台服务，然后退出。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -96,24 +90,24 @@ struct LogsAndResetPane: View {
                     Button(role: .destructive) {
                         showUninstallConfirmation = true
                     } label: {
-                        Text("彻底卸载并还原…")
+                        Text("卸载…")
                     }
                 }
             } header: {
-                Text("应急恢复与无残留卸载")
+                Text("恢复")
             }
         }
         .formStyle(.grouped)
         .onAppear {
             coordinator.refreshEvents()
         }
-        .alert("确认彻底卸载 ClaudeGuard 并还原系统设置？", isPresented: $showUninstallConfirmation) {
+        .alert("要卸载 ClaudeGuard 吗？", isPresented: $showUninstallConfirmation) {
             Button("取消", role: .cancel) {}
-            Button("彻底卸载并退出", role: .destructive) {
+            Button("卸载", role: .destructive) {
                 coordinator.uninstallAndQuit()
             }
         } message: {
-            Text("将要求输入一次管理员密码以移除 /Library/LaunchDaemons/com.claudeguard.helper.plist，并完整恢复 /etc/hosts、pf 防火墙与 claude 命令行入口。")
+            Text("需要输入一次管理员密码。网络设置和 claude 命令会恢复到安装前的样子。")
         }
     }
 
@@ -128,24 +122,23 @@ struct LogsAndResetPane: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(Self.dateFormatter.string(from: ev.timestamp))
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.subheadline)
+                        .monospacedDigit()
                         .foregroundStyle(.secondary)
 
                     Text(ev.kind.label)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(colorForEvent(ev.kind).opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+                        .font(.subheadline.weight(.medium))
 
                     if let ip = ev.detectedIP {
                         Text(ip)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.subheadline)
+                            .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 Text(ev.message)
-                    .font(.system(size: 12))
+                    .font(.body)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -176,13 +169,13 @@ struct LogsAndResetPane: View {
     private func colorForEvent(_ kind: GuardEventKind) -> Color {
         switch kind {
         case .appLaunchIntercepted, .runningAppTerminated, .cliSessionBlocked:
-            return .red
+            return .guardBlock
         case .ipJumpLatched, .probeWarning:
-            return .orange
+            return .guardHold
         case .helperInstalled, .ipJumpAcknowledged, .timezoneAlignedLaunch:
-            return .green
+            return .guardPass
         default:
-            return .accentColor
+            return .secondary
         }
     }
 }

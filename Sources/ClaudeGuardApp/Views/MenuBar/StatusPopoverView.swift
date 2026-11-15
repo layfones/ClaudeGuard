@@ -2,27 +2,39 @@ import SwiftUI
 import AppKit
 import ClaudeGuardCore
 
+/// 菜单栏状态面板（`MenuBarExtra(.window)`，macOS 26 起由系统提供 Liquid Glass 背景）。
+/// 只回答一个问题：现在打开 Claude 安全吗？——判定、线路图、两行明细、唯一主操作。
 struct StatusPopoverView: View {
     @Bindable var coordinator: GuardCoordinator
     var openSetupAction: () -> Void
-    var openSettingsAction: (SettingsTab) -> Void
+    /// 传入 nil 时恢复上次查看的设置面板
+    var openSettingsAction: (SettingsTab?) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showQuickAddIP = false
     @State private var quickAddRemark = ""
-    @State private var copiedIPFeedback = false
 
-    private var verdictColor: Color {
-        switch coordinator.state.verdict {
-        case .allowed: return .green
-        case .blocked: return .red
-        case .offline: return .orange
-        case .paused:  return .secondary
-        }
+    private var installedTargetIDs: Set<String> {
+        Set(coordinator.config.targets.filter { ProcessEnforcer.resolveInstalledAppURL(for: $0) != nil }.map(\.id))
+    }
+
+    private var verdict: VerdictPresentation {
+        VerdictPresenter.make(
+            state: coordinator.state,
+            config: coordinator.config,
+            context: .init(
+                helperInstalled: coordinator.state.helperInstalled,
+                publicIPv6Disabled: coordinator.systemIPv6Status.isPublicIPv6DisabledOnAll,
+                installedTargetIDs: installedTargetIDs
+            )
+        )
     }
 
     private var canQuickAddCurrentIP: Bool {
-        guard let ip = coordinator.state.primaryIP,
+        guard verdict.tone == .block,
+              !coordinator.state.jumpLatched,
+              !(coordinator.state.proxyEnvironment.isV2rayNInstalled && !coordinator.state.proxyEnvironment.isV2rayNRunning),
+              let ip = coordinator.state.primaryIP,
               CIDRMatcher.isValidLiteralIP(ip) else {
             return false
         }
@@ -30,74 +42,36 @@ struct StatusPopoverView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            headerSection
-
-            if !coordinator.config.onboardingCompleted || !coordinator.state.helperInstalled {
-                onboardingCalloutCard
-            } else if coordinator.config.protectionEnabled && coordinator.state.verdict != .allowed {
-                recoveryActionCard
+        let verdict = self.verdict
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                titleRow
+                hero(verdict)
+                RouteView(route: RoutePresenter.make(state: coordinator.state, config: coordinator.config))
+                detailRows
+                Divider()
+                guardedApps
+                actionArea(verdict)
             }
-
-            egressOverviewCard
-
-            channelBreakdownCard
-
-            quickModeAndTargetsBar
-
-            if let msg = coordinator.lastActionMessage {
-                HStack(spacing: 6) {
-                    Image(systemName: coordinator.lastActionIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(coordinator.lastActionIsError ? .red : .green)
-                    Text(msg)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
-                    Button {
-                        coordinator.setBanner(nil, isError: false)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("关闭提示")
-                }
-                .padding(.horizontal, 4)
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
 
             Divider()
+                .padding(.horizontal, 16)
 
-            footerBar
+            menuRows
+                .padding(6)
         }
-        .padding(14)
-        .frame(width: 356)
+        .frame(width: 340)
     }
 
-    // MARK: - 1. 顶部状态总览与主开关
+    // MARK: - 标题行：名称 · 重新检测 · 总开关
 
-    private var headerSection: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(verdictColor.opacity(0.16))
-                    .frame(width: 38, height: 38)
-                Image(systemName: coordinator.state.verdict.sfSymbolName)
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(verdictColor)
-            }
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(coordinator.state.verdict.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text(coordinator.state.reason)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    private var titleRow: some View {
+        HStack(spacing: 6) {
+            Text("ClaudeGuard")
+                .font(.headline)
 
             Spacer(minLength: 4)
 
@@ -114,436 +88,255 @@ struct StatusPopoverView: View {
                         value: coordinator.isChecking
                     )
                     .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .help("立即重新检测所有出口链路")
-            .accessibilityLabel("立即重新检测")
+            .foregroundStyle(.secondary)
+            .help("重新检测出口")
+            .accessibilityLabel("重新检测出口")
 
-            Toggle("启用守护", isOn: Binding(
+            Toggle("守护", isOn: Binding(
                 get: { coordinator.config.protectionEnabled },
                 set: { coordinator.toggleProtection($0) }
             ))
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
-            .accessibilityLabel("总防护开关")
+            .accessibilityLabel("守护开关")
         }
     }
 
-    // MARK: - 2. 引导 / 异常一键恢复条
+    // MARK: - 判定
 
-    private var onboardingCalloutCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(
-                !coordinator.state.helperInstalled ? "尚未启用系统级网络防线" : "差一步完成初始白名单配置",
-                systemImage: "sparkles"
-            )
-            .font(.system(size: 12.5, weight: .semibold))
-
-            Text("完成 1 分钟向导后，即使忘记开启 v2rayN 直接点 Dock 启动 Claude，也能在内核层零泄漏拦下。")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button {
-                openSetupAction()
-            } label: {
-                Label("打开快速配置向导…", systemImage: "wand.and.stars")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-        }
-        .padding(10)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private var recoveryActionCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if coordinator.state.proxyEnvironment.isV2rayNInstalled && !coordinator.state.proxyEnvironment.isV2rayNRunning {
-                Button {
-                    coordinator.launchV2rayN()
-                } label: {
-                    Label("检测到 v2rayN 未运行 · 一键启动 v2rayN", systemImage: "paperplane.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-            }
-
-            if coordinator.state.jumpLatched {
-                Button {
-                    coordinator.acknowledgeCurrentExitJump()
-                } label: {
-                    Label("信任当前新出口并解除锁定", systemImage: "checkmark.seal.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-            }
-
-            if let stunIP = coordinator.state.stunSnapshot?.ip,
-               stunIP.contains(":"),
-               !coordinator.state.stunSnapshot!.passed,
-               !coordinator.systemIPv6Status.isPublicIPv6DisabledOnAll {
-                Button {
-                    coordinator.toggleSystemPublicIPv6(disable: true)
-                } label: {
-                    Label("STUN 漏出公网 IPv6 · 一键关闭公网 IPv6", systemImage: "shield.lefthalf.filled")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .disabled(coordinator.isSwitchingIPv6)
-            }
-
-            if canQuickAddCurrentIP, let currentIP = coordinator.state.primaryIP {
-                if showQuickAddIP {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("将当前出口 \(currentIP) 加入白名单（确认代理已开启后再添加）：")
-                            .font(.system(size: 11.5, weight: .medium))
-                        HStack(spacing: 6) {
-                            TextField("节点备注（如：美西主力节点）", text: $quickAddRemark)
-                                .textFieldStyle(.roundedBorder)
-                                .controlSize(.small)
-                            Button("保存") {
-                                let defaultName = coordinator.state.primaryCountryCode.map { "\($0) 代理节点" } ?? "代理节点"
-                                if coordinator.addAllowedIP(
-                                    cidrOrIP: currentIP,
-                                    label: quickAddRemark.isEmpty ? defaultName : quickAddRemark
-                                ) {
-                                    quickAddRemark = ""
-                                    withAnimation(.easeInOut(duration: 0.18)) {
-                                        showQuickAddIP = false
-                                    }
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-
-                            Button("取消") {
-                                withAnimation(.easeInOut(duration: 0.18)) {
-                                    showQuickAddIP = false
-                                }
-                            }
-                            .controlSize(.small)
-                        }
-                    }
-                } else {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            showQuickAddIP = true
-                        }
-                    } label: {
-                        Label("将当前出口 \(currentIP) 加入白名单…", systemImage: "plus.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
+    private func hero(_ v: VerdictPresentation) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VerdictGlyph(tone: v.tone, symbol: v.symbol)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(v.title)
+                    .font(.system(size: 20, weight: .bold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(v.message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityElement(children: .combine)
     }
 
-    // MARK: - 3. 当前主出口与代理环境信息卡
+    // MARK: - 明细
 
-    private var egressOverviewCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("当前主出口")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                if let label = coordinator.state.matchedWhitelistLabel {
-                    Label(label, systemImage: "tag.fill")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.green)
-                }
-            }
-
-            HStack(spacing: 8) {
-                Text(coordinator.state.primaryIP ?? "暂未获取出口")
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                    .textSelection(.enabled)
-
-                if let cc = coordinator.state.primaryCountryCode {
-                    Text(cc)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
-                }
-
-                Spacer()
-
-                if let ip = coordinator.state.primaryIP {
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(ip, forType: .string)
-                        copiedIPFeedback = true
-                        Task {
-                            try? await Task.sleep(for: .seconds(1.5))
-                            copiedIPFeedback = false
-                        }
-                    } label: {
-                        Image(systemName: copiedIPFeedback ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11.5))
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("复制出口 IP")
-                    .accessibilityLabel("复制出口 IP")
-                }
-            }
-
-            HStack(spacing: 6) {
-                Image(systemName: !coordinator.state.proxyEnvironment.activeTUNInterfaces.isEmpty ? "network.badge.shield.half.filled" : "antenna.radiowaves.left.and.right")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text(coordinator.state.proxyEnvironment.summaryBadge)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 6) {
-                Image(systemName: coordinator.state.effectiveTimeZone != nil ? "clock.badge.checkmark" : "clock")
-                    .font(.system(size: 11))
-                    .foregroundStyle(coordinator.state.effectiveTimeZone != nil ? Color.accentColor : Color.secondary)
-                if let tz = coordinator.state.effectiveTimeZone {
-                    Text("客户端时区：\(TimezoneAlignmentResolver.formatDisplaySummary(for: tz))")
-                        .font(.system(size: 11.5, design: .monospaced))
+    private var detailRows: some View {
+        VStack(spacing: 2) {
+            ForEach(StatusDetailPresenter.make(
+                state: coordinator.state,
+                config: coordinator.config,
+                helperInstalled: coordinator.state.helperInstalled
+            )) { row in
+                HStack(spacing: 8) {
+                    Image(systemName: row.symbol)
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                } else {
-                    Text("客户端时区：跟随本机系统 (\(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier()))")
-                        .font(.system(size: 11.5))
+                        .frame(width: 16)
+                        .accessibilityHidden(true)
+                    Text(row.label)
+                    Spacer(minLength: 8)
+                    Text(row.value)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.body)
+                .frame(minHeight: 24)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    // MARK: - 守护的应用
+
+    private var guardedApps: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("守护的应用")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            ChipFlowLayout(spacing: 6) {
+                ForEach(coordinator.config.targets) { target in
+                    GuardChip(title: VerdictPresenter.shortName(target.name), isOn: target.isEnabled) {
+                        coordinator.updateConfig { cfg in
+                            if let idx = cfg.targets.firstIndex(where: { $0.id == target.id }) {
+                                cfg.targets[idx].isEnabled.toggle()
+                            }
+                        }
+                    }
+                    .help(target.isEnabled ? "停止守护 \(target.name)" : "开始守护 \(target.name)")
                 }
             }
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    // MARK: - 4. 三路通道与目标真实链路明细
+    // MARK: - 唯一主操作
 
-    private var channelBreakdownCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("多路出口一致性校验")
-                .font(.system(size: 11.5, weight: .medium))
+    @ViewBuilder
+    private func actionArea(_ v: VerdictPresentation) -> some View {
+        if let action = v.action, let title = v.actionTitle {
+            VStack(spacing: 8) {
+                Button {
+                    perform(action)
+                } label: {
+                    Text(title)
+                        .frame(maxWidth: .infinity)
+                }
+                .guardProminentButton()
+                .controlSize(.large)
+                .disabled(action == .disablePublicIPv6 && coordinator.isSwitchingIPv6)
+
+                if let hint = v.hint {
+                    Text(hint)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+
+        if canQuickAddCurrentIP, let ip = coordinator.state.primaryIP {
+            quickAdd(ip: ip)
+        }
+
+        if let msg = coordinator.lastActionMessage {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: coordinator.lastActionIsError ? "exclamationmark.circle" : "checkmark.circle")
+                    .foregroundStyle(coordinator.lastActionIsError ? Color.guardBlock : .secondary)
+                Text(msg)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button {
+                    coordinator.setBanner(nil, isError: false)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
-
-            if let httpSnap = coordinator.state.httpSnapshot {
-                probeRow(
-                    title: "HTTP 出口",
-                    ip: httpSnap.ip,
-                    badge: nil,
-                    latency: httpSnap.latencyMs,
-                    passed: httpSnap.passed,
-                    missing: httpSnap.ip == nil
-                )
+                .accessibilityLabel("关闭提示")
             }
+        }
+    }
 
-            if let stunSnap = coordinator.state.stunSnapshot {
-                probeRow(
-                    title: "UDP STUN",
-                    ip: stunSnap.ip,
-                    badge: nil,
-                    latency: stunSnap.latencyMs,
-                    passed: stunSnap.passed,
-                    missing: stunSnap.ip == nil
-                )
-            }
-
-            ForEach(coordinator.state.targetSnapshots) { tSnap in
-                probeRow(
-                    title: shortTargetTitle(tSnap.targetName),
-                    ip: tSnap.ip,
-                    badge: tSnap.countryCode,
-                    latency: tSnap.latencyMs,
-                    passed: tSnap.passed,
-                    missing: tSnap.ip == nil
-                )
-            }
-
-            if coordinator.state.targetSnapshots.isEmpty && coordinator.state.verdict.shouldBlockDomains {
+    @ViewBuilder
+    private func quickAdd(ip: String) -> some View {
+        if showQuickAddIP {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("先确认 v2rayN 已连上，再把 \(ip) 加入白名单。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                    Text("目标域名当前处于底层封锁态，待代理恢复后自动复核真实链路")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.top, 2)
-            }
-        }
-        .padding(10)
-        .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private func probeRow(
-        title: String,
-        ip: String?,
-        badge: String?,
-        latency: Int?,
-        passed: Bool,
-        missing: Bool
-    ) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: !coordinator.config.protectionEnabled ? "minus.circle" : (missing ? "clock.badge.exclamationmark" : (passed ? "checkmark.circle.fill" : "xmark.octagon.fill")))
-                .font(.system(size: 12))
-                .foregroundStyle(!coordinator.config.protectionEnabled ? Color.secondary : (missing ? Color.orange : (passed ? Color.green : Color.red)))
-                .accessibilityHidden(true)
-
-            Text(title)
-                .font(.system(size: 12))
-                .lineLimit(1)
-
-            Spacer(minLength: 4)
-
-            if let badge {
-                Text(badge)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(ip ?? "未返回")
-                .font(.system(size: 11.5, design: .monospaced))
-                .foregroundStyle(ip == nil ? .secondary : .primary)
-                .lineLimit(1)
-
-            if let ms = latency {
-                Text("\(ms)ms")
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 42, alignment: .trailing)
-            }
-        }
-    }
-
-    // MARK: - 5. 快捷检测模式切换与已守护应用概览
-
-    private var quickModeAndTargetsBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("检测模式")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Picker("检测模式", selection: Binding(
-                    get: { coordinator.config.exitCheckMode },
-                    set: { mode in
-                        coordinator.updateConfig { $0.exitCheckMode = mode }
+                    TextField("备注，例如：洛杉矶主力", text: $quickAddRemark)
+                        .textFieldStyle(.roundedBorder)
+                    Button("加入") {
+                        let fallback = coordinator.state.primaryCountryCode.map { "\(RoutePresenter.regionName(for: $0))节点" } ?? "代理节点"
+                        if coordinator.addAllowedIP(cidrOrIP: ip, label: quickAddRemark.isEmpty ? fallback : quickAddRemark) {
+                            quickAddRemark = ""
+                            withAnimation(.easeInOut(duration: 0.18)) { showQuickAddIP = false }
+                        }
                     }
-                )) {
-                    ForEach(ExitCheckMode.allCases) { mode in
-                        Text(mode.shortTitle).tag(mode)
+                    Button("取消") {
+                        withAnimation(.easeInOut(duration: 0.18)) { showQuickAddIP = false }
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
                 .controlSize(.small)
-                .frame(width: 170)
             }
+        } else {
+            Button("这是我的代理出口？加入白名单…") {
+                withAnimation(.easeInOut(duration: 0.18)) { showQuickAddIP = true }
+            }
+            .buttonStyle(.link)
+            .font(.subheadline)
+            .frame(maxWidth: .infinity)
+        }
+    }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(coordinator.config.targets) { target in
-                        Button {
-                            coordinator.updateConfig { cfg in
-                                if let idx = cfg.targets.firstIndex(where: { $0.id == target.id }) {
-                                    cfg.targets[idx].isEnabled.toggle()
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: target.isEnabled ? "checkmark.shield.fill" : "circle")
-                                    .font(.system(size: 10.5))
-                                    .foregroundStyle(target.isEnabled ? Color.accentColor : .secondary)
-                                Text(shortTargetTitle(target.name))
-                                    .font(.system(size: 11.5, weight: target.isEnabled ? .medium : .regular))
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(
-                                target.isEnabled ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.1),
-                                in: Capsule()
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .help("点击切换是否守护 \(target.name)")
-                    }
-                }
-            }
-
-            let installedEnabledTargets = coordinator.config.enabledTargets.filter {
-                ProcessEnforcer.resolveInstalledAppURL(for: $0) != nil
-            }
-            if !installedEnabledTargets.isEmpty && !coordinator.state.verdict.shouldBlockFreshLaunch {
-                HStack(spacing: 6) {
-                    Text("带时区启动")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    ForEach(installedEnabledTargets) { target in
-                        Button {
-                            coordinator.launchGuardedAppAligned(target)
-                        } label: {
-                            Label(shortTargetTitle(target.name), systemImage: "play.fill")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .help("以对齐时区 (\(coordinator.state.effectiveTimeZone ?? "系统默认")) 启动 \(target.name)")
-                    }
-                }
+    private func perform(_ action: VerdictPresentation.Action) {
+        switch action {
+        case .openSetup:
+            openSetupAction()
+        case .resumeProtection:
+            coordinator.toggleProtection(true)
+        case .trustNewExit:
+            coordinator.acknowledgeCurrentExitJump()
+        case .launchV2rayN, .openV2rayN:
+            coordinator.launchV2rayN()
+        case .disablePublicIPv6:
+            coordinator.toggleSystemPublicIPv6(disable: true)
+        case .launchTarget(let id):
+            if let target = coordinator.config.targets.first(where: { $0.id == id }) {
+                coordinator.launchGuardedAppAligned(target)
             }
         }
     }
 
-    // MARK: - 6. 底部工具栏
+    // MARK: - 菜单行
 
-    private var footerBar: some View {
-        HStack {
-            Button {
-                openSettingsAction(.general)
-            } label: {
-                Label("设置…", systemImage: "gearshape")
-                    .font(.system(size: 12))
+    private var menuRows: some View {
+        VStack(spacing: 0) {
+            MenuRowButton(title: "设置…", shortcut: "⌘,") {
+                openSettingsAction(nil)
             }
-            .buttonStyle(.borderless)
             .keyboardShortcut(",", modifiers: .command)
 
-            Spacer()
-
-            Button {
+            MenuRowButton(title: "拦截记录") {
                 openSettingsAction(.logs)
-            } label: {
-                Label("拦截日志", systemImage: "list.bullet.rectangle")
-                    .font(.system(size: 12))
             }
-            .buttonStyle(.borderless)
 
-            Spacer()
-
-            Button {
+            MenuRowButton(title: "退出 ClaudeGuard", shortcut: "⌘Q") {
                 NSApplication.shared.terminate(nil)
-            } label: {
-                Text("退出")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .help("退出菜单栏进程（已写入的系统封锁规则在重新放行前会继续保持保护）")
+            .keyboardShortcut("q", modifiers: .command)
+            .help("退出后，已经写入的网络封锁会一直保持，直到出口恢复正常并重新放行。")
         }
     }
+}
 
-    private func shortTargetTitle(_ raw: String) -> String {
-        if let paren = raw.firstIndex(of: "(") {
-            return String(raw[..<paren]).trimmingCharacters(in: .whitespaces)
+/// 自动换行排布的胶囊组。
+struct ChipFlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > maxWidth {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
         }
-        return raw
+        return CGSize(width: proposal.width ?? widest, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }

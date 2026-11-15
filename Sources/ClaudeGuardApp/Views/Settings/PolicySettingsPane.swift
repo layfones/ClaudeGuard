@@ -1,213 +1,177 @@
 import SwiftUI
 import ClaudeGuardCore
 
+/// 「白名单」面板：放行条件、IP 白名单、允许地区、出口变化、时区与高级选项。
 struct PolicySettingsPane: View {
     @Bindable var coordinator: GuardCoordinator
 
-    @State private var newIPOrCIDR: String = ""
-    @State private var newRemark: String = ""
+    @State private var showAddSheet = false
     @State private var customRegionInput: String = ""
-    @State private var validationError: String?
 
-    private let presetRegions: [(code: String, label: String)] = [
-        ("US", "🇺🇸 美国 US"),
-        ("JP", "🇯🇵 日本 JP"),
-        ("SG", "🇸🇬 新加坡 SG"),
-        ("TW", "🇹🇼 台湾 TW"),
-        ("KR", "🇰🇷 韩国 KR"),
-        ("GB", "🇬🇧 英国 GB"),
-        ("DE", "🇩🇪 德国 DE"),
-        ("CA", "🇨🇦 加拿大 CA"),
-        ("AU", "🇦🇺 澳大利亚 AU"),
-        ("NL", "🇳🇱 荷兰 NL")
-    ]
+    private let presetRegions = ["US", "JP", "SG", "TW", "KR", "GB", "DE", "CA", "AU", "NL"]
+
+    private var currentExitIP: String? {
+        guard let ip = coordinator.state.primaryIP, CIDRMatcher.isValidLiteralIP(ip) else { return nil }
+        return CIDRMatcher.firstMatchingEntry(for: ip, in: coordinator.config.allowedIPs) == nil ? ip : nil
+    }
 
     var body: some View {
         Form {
             Section {
-                Picker("出口检测通道", selection: Binding(
-                    get: { coordinator.config.exitCheckMode },
-                    set: { mode in
-                        coordinator.updateConfig { $0.exitCheckMode = mode }
-                    }
-                )) {
-                    ForEach(ExitCheckMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-
-                Text(coordinator.config.exitCheckMode.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker("放行判定条件", selection: Binding(
+                Picker("放行规则", selection: Binding(
                     get: { coordinator.config.admissionRuleMode },
-                    set: { rule in
-                        coordinator.updateConfig { $0.admissionRuleMode = rule }
-                    }
+                    set: { rule in coordinator.updateConfig { $0.admissionRuleMode = rule } }
                 )) {
                     ForEach(AdmissionRuleMode.allCases) { rule in
-                        Text(rule.title).tag(rule)
+                        Text(rule.displayTitle).tag(rule)
+                    }
+                }
+                Picker("检测方式", selection: Binding(
+                    get: { coordinator.config.exitCheckMode },
+                    set: { mode in coordinator.updateConfig { $0.exitCheckMode = mode } }
+                )) {
+                    ForEach(ExitCheckMode.allCases) { mode in
+                        Text(mode.displayTitle).tag(mode)
                     }
                 }
             } header: {
-                Text("检测模式与准入规则")
+                Text("放行条件")
+            } footer: {
+                Text(coordinator.config.exitCheckMode.displayFootnote).formFootnote()
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        TextField("IP 或 CIDR（如 203.0.113.10 或 198.51.100.0/24）", text: $newIPOrCIDR)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
-
-                        TextField("节点备注（如：v2rayN 美西主力）", text: $newRemark)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 180)
-
-                        if let liveIP = coordinator.state.primaryIP {
-                            Button("填入当前 IP") {
-                                newIPOrCIDR = liveIP
-                                if newRemark.isEmpty, let cc = coordinator.state.primaryCountryCode {
-                                    newRemark = "\(cc) 代理节点"
-                                }
-                                validationError = nil
-                            }
-                            .help("填入当前探测到的出口：\(liveIP)")
-                        }
-
-                        Button("添加") {
-                            submitNewIPEntry()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(newIPOrCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
-                    if let err = validationError {
-                        Text(err)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-
                 if coordinator.config.allowedIPs.isEmpty {
-                    HStack {
-                        Image(systemName: "shield.lefthalf.filled.trianglebadge.exclamationmark")
-                            .foregroundStyle(.orange)
-                        Text("当前白名单为空：在仅白名单模式下将默认拦截所有受保护客户端，请先开启 v2rayN 后添加你的节点出口 IP。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
+                    Text("还没有白名单。先打开 v2rayN，确认连上后，再把当前出口加入。")
+                        .foregroundStyle(.secondary)
                 } else {
                     ForEach(coordinator.config.allowedIPs) { entry in
-                        whitelistRow(entry)
+                        WhitelistRow(entry: entry, coordinator: coordinator)
+                    }
+                }
+                HStack {
+                    Button {
+                        showAddSheet = true
+                    } label: {
+                        Label("添加…", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
+                    if let ip = currentExitIP {
+                        Button("加入当前出口 \(ip)") {
+                            let fallback = coordinator.state.primaryCountryCode.map { "\(RoutePresenter.regionName(for: $0))节点" } ?? "代理节点"
+                            _ = coordinator.addAllowedIP(cidrOrIP: ip, label: fallback)
+                        }
+                        .buttonStyle(.link)
                     }
                 }
             } header: {
-                Text("IP / 网段白名单（\(coordinator.config.enabledAllowedIPs.count) 条启用中）")
+                Text("IP 白名单")
+            } footer: {
+                Text("先确认 v2rayN 已连上，再把当前出口加入白名单。右键点按一条可以删除。").formFootnote()
             }
 
             if coordinator.config.admissionRuleMode != .ipOnly {
                 Section {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 8)], alignment: .leading, spacing: 8) {
-                        ForEach(presetRegions, id: \.code) { item in
-                            let selected = coordinator.config.normalizedAllowedRegions.contains(item.code)
-                            Button {
-                                toggleRegion(item.code)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selected ? Color.accentColor : .secondary)
-                                    Text(item.label)
-                                        .font(.system(size: 12))
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    selected ? Color.accentColor.opacity(0.14) : Color.secondary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-
-                    HStack(spacing: 8) {
-                        TextField("其他两位 ISO 国家/地区码（如 FR、NL）", text: $customRegionInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 240)
-                        Button("添加地区码") {
-                            let code = customRegionInput.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-                            guard code.count == 2, code.allSatisfy(\.isLetter) else { return }
-                            if !coordinator.config.normalizedAllowedRegions.contains(code) {
+                    ChipFlowLayout(spacing: 6) {
+                        ForEach(regionOptions, id: \.self) { code in
+                            let on = coordinator.config.normalizedAllowedRegions.contains(code)
+                            GuardChip(title: "\(RoutePresenter.regionName(for: code)) \(code)", isOn: on) {
                                 toggleRegion(code)
                             }
-                            customRegionInput = ""
-                        }
-                        Spacer()
-                        if !coordinator.config.normalizedAllowedRegions.isEmpty {
-                            Text("已启用：\(coordinator.config.normalizedAllowedRegions.sorted().joined(separator: ", "))")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
                         }
                     }
+                    .padding(.vertical, 2)
+                    HStack {
+                        TextField("其他地区码", text: $customRegionInput, prompt: Text("例如 FR"))
+                            .frame(width: 200)
+                            .onSubmit(addCustomRegion)
+                        Button("添加", action: addCustomRegion)
+                            .disabled(!isValidRegionCode(customRegionInput))
+                    }
                 } header: {
-                    Text("允许的国家 / 地区码（基于目标 cdn-cgi/trace 真实链路识别）")
+                    Text("允许地区")
+                } footer: {
+                    Text("地区来自目标网站返回的真实链路。").formFootnote()
                 }
             }
 
             Section {
                 Toggle(isOn: Binding(
-                    get: { coordinator.config.timezoneAlignmentEnabled },
-                    set: { enabled in
-                        coordinator.updateConfig { $0.timezoneAlignmentEnabled = enabled }
-                    }
+                    get: { coordinator.config.detectIPChange },
+                    set: { enabled in coordinator.updateConfig { $0.detectIPChange = enabled } }
                 )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("启用进程级时区对齐")
-                        Text("勾选后，受保护客户端会按出口地区使用对应时区；取消勾选则全部沿用本机系统时区。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("出口变化时暂停放行")
+                    Text("即使跳到另一个白名单节点，也需要你确认一次。")
                 }
-
-                if coordinator.config.timezoneAlignmentEnabled {
-                    Picker("客户端时区策略", selection: Binding(
-                        get: { coordinator.config.timezoneAlignmentMode },
-                        set: { mode in
-                            coordinator.updateConfig { $0.timezoneAlignmentMode = mode }
-                        }
-                    )) {
-                        ForEach(TimezoneAlignmentMode.allCases.filter { $0 != .disabled }) { mode in
-                            Text(mode.title).tag(mode)
+                if coordinator.state.jumpLatched {
+                    HStack {
+                        Text("\(coordinator.state.jumpBeforeIP ?? "原出口") → \(coordinator.state.jumpAfterIP ?? "新出口")")
+                            .monospacedDigit()
+                        Spacer()
+                        Button("信任新出口") {
+                            coordinator.acknowledgeCurrentExitJump()
                         }
                     }
                 }
+            } header: {
+                Text("出口变化")
+            }
 
-                HStack {
-                    Text("当前生效状态")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    if let tz = coordinator.state.effectiveTimeZone {
-                        Text("本机保持 \(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())  →  客户端注入 \(TimezoneAlignmentResolver.formatDisplaySummary(for: tz))")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("沿用本机时区 \(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
+            timezoneSection
+
+            Section {
+                Toggle(isOn: Binding(
+                    get: { coordinator.config.useCustomHTTPProxy },
+                    set: { val in coordinator.updateConfig { $0.useCustomHTTPProxy = val } }
+                )) {
+                    Text("手动指定本地 HTTP 代理")
+                    Text("默认跟随系统代理和 TUN。检测和终端里的 claude 都会使用它。")
+                }
+                if coordinator.config.useCustomHTTPProxy {
+                    HStack {
+                        TextField("代理地址", text: Binding(
+                            get: { coordinator.config.customHTTPProxyURL },
+                            set: { url in coordinator.updateConfig({ $0.customHTTPProxyURL = url }, triggerCheck: false) }
+                        ), prompt: Text("http://127.0.0.1:10808"))
+                        .monospacedDigit()
+                        Button("应用") { coordinator.triggerRecheck() }
                     }
                 }
+            } header: {
+                Text("高级")
+            }
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $showAddSheet) {
+            AddWhitelistSheet(coordinator: coordinator, suggestedIP: coordinator.state.primaryIP)
+        }
+    }
 
-                if coordinator.config.timezoneAlignmentEnabled && coordinator.config.timezoneAlignmentMode == .manual {
-                    Picker("常用目标时区", selection: Binding(
+    @ViewBuilder
+    private var timezoneSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { coordinator.config.timezoneAlignmentEnabled },
+                set: { enabled in coordinator.updateConfig { $0.timezoneAlignmentEnabled = enabled } }
+            )) {
+                Text("按出口地区设置客户端时区")
+                Text("只影响受保护的应用，Mac 的系统时区保持不变。")
+            }
+
+            if coordinator.config.timezoneAlignmentEnabled {
+                Picker("时区", selection: Binding(
+                    get: { coordinator.config.timezoneAlignmentMode },
+                    set: { mode in coordinator.updateConfig { $0.timezoneAlignmentMode = mode } }
+                )) {
+                    Text("自动（跟随出口）").tag(TimezoneAlignmentMode.autoFromExit)
+                    Text("手动指定").tag(TimezoneAlignmentMode.manual)
+                }
+
+                if coordinator.config.timezoneAlignmentMode == .manual {
+                    Picker("指定时区", selection: Binding(
                         get: { coordinator.config.manualTimeZoneIdentifier },
-                        set: { tz in
-                            coordinator.updateConfig { $0.manualTimeZoneIdentifier = tz }
-                        }
+                        set: { tz in coordinator.updateConfig { $0.manualTimeZoneIdentifier = tz } }
                     )) {
                         ForEach(TimezoneAlignmentResolver.commonTimeZones, id: \.id) { item in
                             Text(item.label).tag(item.id)
@@ -216,189 +180,56 @@ struct PolicySettingsPane: View {
                             Text(coordinator.config.manualTimeZoneIdentifier).tag(coordinator.config.manualTimeZoneIdentifier)
                         }
                     }
-
-                    HStack {
-                        Text("自定义 IANA 时区")
-                        TextField("例如 America/Los_Angeles 或 Asia/Seoul", text: Binding(
-                            get: { coordinator.config.manualTimeZoneIdentifier },
-                            set: { raw in
-                                coordinator.updateConfig({ $0.manualTimeZoneIdentifier = raw }, triggerCheck: false)
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-
-                        Button("校验并应用") {
-                            coordinator.triggerRecheck()
-                        }
-                    }
-
+                    TextField("IANA 时区", text: Binding(
+                        get: { coordinator.config.manualTimeZoneIdentifier },
+                        set: { raw in coordinator.updateConfig({ $0.manualTimeZoneIdentifier = raw }, triggerCheck: false) }
+                    ), prompt: Text("America/Los_Angeles"))
+                    .onSubmit { coordinator.triggerRecheck() }
                     if !TimezoneAlignmentResolver.isValidTimeZoneIdentifier(coordinator.config.manualTimeZoneIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                        Text("无效的 IANA 时区名称，请使用形如 America/Los_Angeles、Asia/Seoul、Europe/London 的标准标识符。")
-                            .font(.caption)
-                            .foregroundStyle(.red)
+                        Text("找不到这个时区。请使用 America/Los_Angeles、Asia/Seoul 这样的名称。")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.guardBlock)
                     }
                 }
 
-                if coordinator.config.timezoneAlignmentEnabled {
-                    Toggle(isOn: Binding(
-                        get: { coordinator.config.relaunchDockAppsWithTimezone },
-                        set: { val in
-                            coordinator.updateConfig({ $0.relaunchDockAppsWithTimezone = val }, triggerCheck: false)
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("点击 Dock 栏启动受保护应用时自动重拉起并注入时区")
-                            Text("开启后，即使直接点击 Dock 栏上的原版 Claude 或 ChatGPT 图标，ClaudeGuard 也会自动通过 LaunchServices 为其补齐进程级 TZ 时区，同时完全不修改 Mac 系统时间与微信/日历。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                LabeledContent("当前生效") {
+                    if let tz = coordinator.state.effectiveTimeZone {
+                        Text(StatusDetailPresenter.timeZoneSummary(tz))
+                    } else {
+                        Text("跟随本机（\(TimezoneAlignmentResolver.realMachineSystemTimeZoneIdentifier())）")
                     }
                 }
-            } header: {
-                Text("进程级时区自动对齐（不修改整机系统时区）")
-            }
 
-            Section {
                 Toggle(isOn: Binding(
-                    get: { coordinator.config.detectIPChange },
-                    set: { enabled in
-                        coordinator.updateConfig { $0.detectIPChange = enabled }
-                    }
+                    get: { coordinator.config.relaunchDockAppsWithTimezone },
+                    set: { val in coordinator.updateConfig({ $0.relaunchDockAppsWithTimezone = val }, triggerCheck: false) }
                 )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("开启持久化 IP 跳变锁")
-                        Text("记录首次合规基准 IP；一旦中途出口发生跳变（哪怕跳到了另一个白名单节点），也会立即锁死拦截，直到你手动点击「信任当前新出口」确认，防止短时间跨节点跳 IP 触发风控。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("从 Dock 打开时也应用时区")
+                    Text("直接点 Dock 图标打开受保护的应用时，ClaudeGuard 会按对应时区重新打开它。")
                 }
-
-                if coordinator.state.jumpLatched {
-                    HStack {
-                        Label(
-                            "当前处于跳变锁定：\(coordinator.state.jumpBeforeIP ?? "-") → \(coordinator.state.jumpAfterIP ?? "-")",
-                            systemImage: "lock.trianglebadge.exclamationmark.fill"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        Spacer()
-                        Button("信任当前出口并解封") {
-                            coordinator.acknowledgeCurrentExitJump()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                }
-
-                Toggle("手动指定探测与 CLI 使用的本地 HTTP 代理（默认自动跟随系统代理与 TUN）", isOn: Binding(
-                    get: { coordinator.config.useCustomHTTPProxy },
-                    set: { val in
-                        coordinator.updateConfig { $0.useCustomHTTPProxy = val }
-                    }
-                ))
-
-                if coordinator.config.useCustomHTTPProxy {
-                    HStack {
-                        Text("HTTP 代理地址")
-                        TextField("例如 http://127.0.0.1:10808", text: Binding(
-                            get: { coordinator.config.customHTTPProxyURL },
-                            set: { url in
-                                coordinator.updateConfig({ $0.customHTTPProxyURL = url }, triggerCheck: false)
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-
-                        Button("应用并重测") {
-                            coordinator.triggerRecheck()
-                        }
-                    }
-                }
-            } header: {
-                Text("防跳变锁与高级代理选项")
             }
-        }
-        .formStyle(.grouped)
-    }
-
-    private func whitelistRow(_ entry: AllowedIPEntry) -> some View {
-        let isCurrentlyMatched: Bool = {
-            guard entry.isEnabled, let live = coordinator.state.primaryIP else { return false }
-            return CIDRMatcher.matches(ip: live, rule: entry.cidrOrIP)
-        }()
-
-        return HStack(spacing: 10) {
-            Toggle("启用该规则", isOn: Binding(
-                get: { entry.isEnabled },
-                set: { val in
-                    coordinator.updateConfig { cfg in
-                        if let idx = cfg.allowedIPs.firstIndex(where: { $0.id == entry.id }) {
-                            cfg.allowedIPs[idx].isEnabled = val
-                        }
-                    }
-                }
-            ))
-            .labelsHidden()
-            .toggleStyle(.checkbox)
-
-            Text(entry.cidrOrIP)
-                .font(.system(.body, design: .monospaced, weight: .medium))
-                .foregroundStyle(entry.isEnabled ? .primary : .secondary)
-                .frame(minWidth: 165, alignment: .leading)
-
-            TextField("节点备注", text: Binding(
-                get: { entry.label },
-                set: { newLabel in
-                    coordinator.updateConfig({ cfg in
-                        if let idx = cfg.allowedIPs.firstIndex(where: { $0.id == entry.id }) {
-                            cfg.allowedIPs[idx].label = newLabel
-                        }
-                    }, triggerCheck: false)
-                }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.small)
-
-            if isCurrentlyMatched {
-                Text("当前命中")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.green.opacity(0.14), in: Capsule())
-            }
-
-            Spacer()
-
-            Button(role: .destructive) {
-                coordinator.updateConfig { cfg in
-                    cfg.allowedIPs.removeAll { $0.id == entry.id }
-                }
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(.red.opacity(0.85))
-            }
-            .buttonStyle(.borderless)
-            .help("移除此白名单规则")
-            .accessibilityLabel("移除 \(entry.cidrOrIP)")
+        } header: {
+            Text("时区")
         }
     }
 
-    private func submitNewIPEntry() {
-        let trimmed = newIPOrCIDR.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard CIDRMatcher.isValidIPOrCIDR(trimmed) else {
-            validationError = "请输入合法的 IPv4/IPv6 地址或 CIDR 网段（例如 203.0.113.10 或 203.0.113.0/24）。"
-            return
+    private var regionOptions: [String] {
+        let custom = coordinator.config.normalizedAllowedRegions.filter { !presetRegions.contains($0) }.sorted()
+        return presetRegions + custom
+    }
+
+    private func isValidRegionCode(_ raw: String) -> Bool {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return code.count == 2 && code.allSatisfy(\.isLetter)
+    }
+
+    private func addCustomRegion() {
+        let code = customRegionInput.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard isValidRegionCode(code) else { return }
+        if !coordinator.config.normalizedAllowedRegions.contains(code) {
+            toggleRegion(code)
         }
-        validationError = nil
-        if coordinator.addAllowedIP(
-            cidrOrIP: trimmed,
-            label: newRemark.trimmingCharacters(in: .whitespacesAndNewlines)
-        ) {
-            newIPOrCIDR = ""
-            newRemark = ""
-        }
+        customRegionInput = ""
     }
 
     private func toggleRegion(_ code: String) {
@@ -410,6 +241,176 @@ struct PolicySettingsPane: View {
                 set.insert(code)
             }
             cfg.allowedRegions = set.sorted()
+        }
+    }
+}
+
+/// 白名单的一行：备注（可直接改） · 当前出口标记 · IP · 开关。
+private struct WhitelistRow: View {
+    let entry: AllowedIPEntry
+    @Bindable var coordinator: GuardCoordinator
+    @State private var hovering = false
+
+    private var isCurrentExit: Bool {
+        guard entry.isEnabled, let live = coordinator.state.primaryIP else { return false }
+        return CIDRMatcher.matches(ip: live, rule: entry.cidrOrIP)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            TextField("备注", text: Binding(
+                get: { entry.label },
+                set: { newLabel in
+                    coordinator.updateConfig({ cfg in
+                        if let idx = cfg.allowedIPs.firstIndex(where: { $0.id == entry.id }) {
+                            cfg.allowedIPs[idx].label = newLabel
+                        }
+                    }, triggerCheck: false)
+                }
+            ), prompt: Text("添加备注"))
+            .labelsHidden()
+            .textFieldStyle(.plain)
+            .foregroundStyle(entry.isEnabled ? .primary : .secondary)
+            .frame(maxWidth: 180, alignment: .leading)
+
+            if isCurrentExit {
+                HStack(spacing: 4) {
+                    Circle().fill(Color.guardPass).frame(width: 6, height: 6)
+                    Text("当前出口")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+
+            Spacer(minLength: 8)
+
+            if hovering {
+                Button(role: .destructive) {
+                    remove()
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("删除这条白名单")
+                .accessibilityLabel("删除 \(entry.cidrOrIP)")
+            }
+
+            Text(entry.cidrOrIP)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Toggle("启用 \(entry.cidrOrIP)", isOn: Binding(
+                get: { entry.isEnabled },
+                set: { val in
+                    coordinator.updateConfig { cfg in
+                        if let idx = cfg.allowedIPs.firstIndex(where: { $0.id == entry.id }) {
+                            cfg.allowedIPs[idx].isEnabled = val
+                        }
+                    }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+        }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("删除", role: .destructive, action: remove)
+        }
+    }
+
+    private func remove() {
+        coordinator.updateConfig { cfg in
+            cfg.allowedIPs.removeAll { $0.id == entry.id }
+        }
+    }
+}
+
+/// 添加白名单（IP 或网段 + 备注）。
+private struct AddWhitelistSheet: View {
+    @Bindable var coordinator: GuardCoordinator
+    var suggestedIP: String?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var ipOrCIDR = ""
+    @State private var remark = ""
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("添加白名单")
+                .font(.headline)
+            Form {
+                TextField("IP 或网段", text: $ipOrCIDR, prompt: Text("203.0.113.10 或 203.0.113.0/24"))
+                    .monospacedDigit()
+                TextField("备注", text: $remark, prompt: Text("例如：洛杉矶主力"))
+                if let error {
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.guardBlock)
+                }
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+
+            HStack {
+                if let ip = suggestedIP, ipOrCIDR.isEmpty {
+                    Button("填入当前出口") { ipOrCIDR = ip }
+                        .buttonStyle(.link)
+                }
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("添加", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(ipOrCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private func submit() {
+        let trimmed = ipOrCIDR.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard CIDRMatcher.isValidIPOrCIDR(trimmed) else {
+            error = "请输入有效的 IPv4、IPv6 地址或网段，例如 203.0.113.10 或 203.0.113.0/24。"
+            return
+        }
+        if coordinator.addAllowedIP(cidrOrIP: trimmed, label: remark.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            dismiss()
+        }
+    }
+}
+
+// MARK: - 设置中的简短说明文字
+
+extension AdmissionRuleMode {
+    var displayTitle: String {
+        switch self {
+        case .ipOnly: return "只看 IP 白名单"
+        case .ipOrRegion: return "IP 白名单或允许地区"
+        case .ipAndRegion: return "IP 白名单且在允许地区"
+        }
+    }
+}
+
+extension ExitCheckMode {
+    var displayTitle: String {
+        switch self {
+        case .all: return "HTTP、UDP 与目标网站"
+        case .httpAndTrace: return "HTTP 与目标网站"
+        case .stunAndTrace: return "UDP 与目标网站"
+        }
+    }
+
+    var displayFootnote: String {
+        switch self {
+        case .all: return "适合 v2rayN 的 TUN 模式：三条线路都要符合规则才放行。"
+        case .httpAndTrace: return "适合只开系统代理、UDP 直连的情况：不检查 UDP。"
+        case .stunAndTrace: return "用 UDP 快速检查，并核对目标网站的真实链路。"
         }
     }
 }

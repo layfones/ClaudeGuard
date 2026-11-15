@@ -513,8 +513,7 @@ public final class GuardCoordinator {
                 if config.showInterceptAlert && !hasAlertedCurrentBlockEpisode {
                     hasAlertedCurrentBlockEpisode = true
                     InterceptAlertPresenter.present(
-                        title: "出口异常，已紧急关闭 \(names)",
-                        reason: currentState.reason,
+                        .runningAppsClosed(names: killedTargets.map(VerdictPresenter.shortName)),
                         state: currentState,
                         coordinator: self
                     )
@@ -581,8 +580,7 @@ public final class GuardCoordinator {
 
                     if self.config.showInterceptAlert {
                         InterceptAlertPresenter.present(
-                            title: "已拦截 \(matched.name) 启动",
-                            reason: self.state.reason,
+                            .launchBlocked(appName: VerdictPresenter.shortName(matched.name)),
                             state: self.state,
                             coordinator: self
                         )

@@ -20,29 +20,26 @@ struct TargetsSettingsPane: View {
                     targetRow(target)
                 }
             } header: {
-                Text("受保护的 AI 客户端列表")
+                Text("受保护的应用")
             } footer: {
-                Text("已启用的客户端在出口未通过检查时：1) 相关域名被写入 /etc/hosts 沉洞（Anthropic 专属 IP 段同时写入 pf 内核防火墙）；2) 从 Dock、聚焦搜索或访达点击启动时毫秒级自动拦截；3) 运行中途代理掉线出现裸连 IP 时立即强行关闭进程。")
+                Text("出口不对时，ClaudeGuard 会封锁这些应用的域名，拦下从 Dock、访达或聚焦搜索的启动，并关闭正在运行的应用。").formFootnote()
             }
 
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("守护其他 macOS 桌面应用")
-                            .font(.body)
-                        Text("从 /Applications 选择任意 .app，自动识别 Bundle ID 并配置专属域名与探测链路。")
-                            .font(.caption)
+                        Text("保护其他应用")
+                        Text("从“应用程序”文件夹选一个 App，再填写它要封锁的域名。")
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button {
+                    Button("添加应用…") {
                         pickApplicationFromFinder()
-                    } label: {
-                        Label("从「应用程序」选择添加…", systemImage: "plus.app")
                     }
                 }
             } header: {
-                Text("自定义扩展")
+                Text("其他应用")
             }
         }
         .formStyle(.grouped)
@@ -53,48 +50,22 @@ struct TargetsSettingsPane: View {
 
     private func targetRow(_ target: GuardedTarget) -> some View {
         let installedAppPath = target.defaultAppPaths.first { FileManager.default.fileExists(atPath: $0) }
+        var details: [String] = [installedAppPath != nil ? "已安装" : "未安装"]
+        details.append("封锁 \(target.expandedBlockedDomains.count) 个域名")
+        if let trace = target.traceURL, let host = URL(string: trace)?.host {
+            details.append("检测 \(host)")
+        }
 
         return HStack(alignment: .center, spacing: 12) {
             appIconView(installedPath: installedAppPath)
-                .frame(width: 34, height: 34)
+                .frame(width: 32, height: 32)
+                .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(target.name)
-                        .font(.system(size: 13.5, weight: .semibold))
-
-                    Text(installedAppPath != nil ? "本机已安装" : "未安装")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(installedAppPath != nil ? .green : .secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1.5)
-                        .background(
-                            (installedAppPath != nil ? Color.green : Color.secondary).opacity(0.12),
-                            in: Capsule()
-                        )
-
-                    if !target.dedicatedPFCIDRs.isEmpty {
-                        Text("含 PF 内核封禁")
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(.blue)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1.5)
-                            .background(Color.blue.opacity(0.12), in: Capsule())
-                    }
-                }
-
-                Text(target.subtitle)
-                    .font(.caption)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(VerdictPresenter.shortName(target.name))
+                Text(details.joined(separator: " · "))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-
-                HStack(spacing: 10) {
-                    Label("封锁域名 \(target.expandedBlockedDomains.count) 个", systemImage: "network.slash")
-                    if let trace = target.traceURL {
-                        Label(trace.replacingOccurrences(of: "https://", with: ""), systemImage: "waveform.path.ecg")
-                    }
-                }
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
             }
 
             Spacer()
@@ -105,10 +76,12 @@ struct TargetsSettingsPane: View {
                         cfg.targets.removeAll { $0.id == target.id }
                     }
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: "minus.circle")
                 }
                 .buttonStyle(.borderless)
-                .help("删除此自定义守护应用")
+                .foregroundStyle(.secondary)
+                .help("移除这个应用")
+                .accessibilityLabel("移除 \(target.name)")
             }
 
             Toggle("守护 \(target.name)", isOn: Binding(
@@ -125,7 +98,7 @@ struct TargetsSettingsPane: View {
             .toggleStyle(.switch)
             .controlSize(.small)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
@@ -143,16 +116,16 @@ struct TargetsSettingsPane: View {
 
     private var customTargetSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("添加自定义守护应用")
+            Text("保护其他应用")
                 .font(.headline)
 
             Form {
-                TextField("应用名称", text: $draftAppName)
+                TextField("名称", text: $draftAppName)
                 TextField("Bundle Identifier", text: $draftBundleID)
                     .font(.system(.body, design: .monospaced))
-                TextField("需要封锁的根域名（逗号分隔，如 perplexity.ai, x.ai）", text: $draftDomainsText)
+                TextField("要封锁的域名", text: $draftDomainsText, prompt: Text("用逗号分隔，例如 perplexity.ai, x.ai"))
                     .font(.system(.body, design: .monospaced))
-                TextField("可选真实链路探测 URL（如 https://x.ai/cdn-cgi/trace）", text: $draftTraceURL)
+                TextField("检测地址（可选）", text: $draftTraceURL, prompt: Text("https://x.ai/cdn-cgi/trace"))
                     .font(.system(.body, design: .monospaced))
             }
             .formStyle(.grouped)
@@ -164,7 +137,7 @@ struct TargetsSettingsPane: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("保存并启用守护") {
+                Button("添加") {
                     saveCustomTarget()
                 }
                 .buttonStyle(.borderedProminent)
@@ -178,7 +151,7 @@ struct TargetsSettingsPane: View {
 
     private func pickApplicationFromFinder() {
         let panel = NSOpenPanel()
-        panel.title = "选择要加入出口门禁守护的应用"
+        panel.title = "选择要保护的应用"
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.allowedContentTypes = [.applicationBundle]
         panel.allowsMultipleSelection = false
@@ -209,7 +182,7 @@ struct TargetsSettingsPane: View {
         let custom = GuardedTarget(
             id: "custom-\(UUID().uuidString.prefix(8))",
             name: draftAppName.trimmingCharacters(in: .whitespacesAndNewlines),
-            subtitle: "自定义守护应用 (\(draftBundleID))",
+            subtitle: "自定义应用（\(draftBundleID)）",
             isBuiltIn: false,
             isEnabled: true,
             bundleIDPrefixes: [draftBundleID.trimmingCharacters(in: .whitespacesAndNewlines)],

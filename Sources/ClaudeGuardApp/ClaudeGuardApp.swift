@@ -38,9 +38,8 @@ struct ClaudeGuardApp: App {
                 openSetupAction: {
                     AppWindowRouter.showSetupWindow(coordinator: coordinator)
                 },
-                openSettingsAction: { tab in
-                    coordinator.selectedSettingsTab = tab
-                    AppWindowRouter.showSettingsWindow(coordinator: coordinator)
+                openSettingsAction: { pane in
+                    AppWindowRouter.showSettingsWindow(coordinator: coordinator, pane: pane)
                 }
             )
         } label: {
@@ -49,12 +48,6 @@ struct ClaudeGuardApp: App {
                 .accessibilityLabel("ClaudeGuard：\(coordinator.state.verdict.title)")
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsRootView(coordinator: coordinator, openSetupAction: {
-                AppWindowRouter.showSetupWindow(coordinator: coordinator)
-            })
-        }
     }
 
     private var menuBarSymbolName: String {
