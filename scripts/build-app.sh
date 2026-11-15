@@ -14,7 +14,7 @@ swift build --package-path "$ROOT_DIR" -c release
 
 BIN_DIR="$(swift build --package-path "$ROOT_DIR" -c release --show-bin-path)"
 
-echo "==> [2/4] 组装应用包 $APP_BUNDLE…"
+echo "==> [2/4] 组装应用包 ${APP_BUNDLE}…"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR" "$HELPERS_DIR" "$RESOURCES_DIR"
 
